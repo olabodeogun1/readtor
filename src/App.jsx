@@ -442,11 +442,15 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
   const [name,  setName]  = useState("");
   const [pass,  setPass]  = useState("");
 
-  const submit = () => {
-  if (!email.includes("@")) return;
-  if (!pass) return;
-  if (mode==="login") onLogin(email, pass);
-  else { if (!name) return; onSignup(email, pass, name); }
+const submit = () => {
+  if (!email.includes("@")) { alert("Please enter a valid email"); return; }
+  if (!pass || pass.length < 6) { alert("Password must be at least 6 characters"); return; }
+  if (mode === "login") {
+    onLogin(email, pass);
+  } else {
+    if (!name || name.trim() === "") { alert("Please enter your name"); return; }
+    onSignup(email, pass, name);
+  }
 };
 
   const inp = { width:"100%", padding:"12px 16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.card, color:T.text, fontSize:15, outline:"none", transition:"border-color 0.2s" };
