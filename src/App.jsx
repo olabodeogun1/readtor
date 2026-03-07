@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { signUp, signIn, signInWithGoogle, signOut, getSession, getProfile, ensureProfile } from './auth';
 
 /* ─────────────────────────────────────────────────────────────────────────────
    READTOR  ·  Web Application
@@ -240,25 +241,86 @@ export default function App() {
     setTimeout(() => setToast(null), 3200);
   };
 
-  const login = (email, name) => {
-    setUser({ id:"u1", name: name||email.split("@")[0], email, level:3, streak:7, totalSessions:24, totalWords:48200, avgWpm:248 });
-    setView("dashboard");
-    notify(`Welcome back! Ready to read faster?`);
-  };
+// Check if user is already logged in when page loads
+useEffect(() => {
+  getSession().then(async session => {
+    if (session) {
+      try {
+        await ensureProfile(
+          session.user.id,
+          session.user.user_metadata?.name ||
+          session.user.user_metadata?.full_name,
+          session.user.email
+        );
+        const profile = await getProfile(session.user.id);
+        setUser({
+          id: session.user.id,
+          name: profile.name,
+          email: session.user.email,
+          level: profile.level,
+          streak: profile.streak,
+          totalSessions: profile.total_sessions,
+          totalWords: 0,
+          avgWpm: 0
+        });
+        setView("dashboard");
+      } catch(e) {
+        setView("auth");
+      }
+    }
+  });
+}, []);
 
-  const signup = (email, name) => {
-    setUser({ id:"u1", name, email, level:1, streak:0, totalSessions:0, totalWords:0, avgWpm:0 });
+const login = async (email, password) => {
+  try {
+    const data = await signIn(email, password);
+    const profile = await getProfile(data.user.id);
+    setUser({
+      id: data.user.id,
+      name: profile.name,
+      email: data.user.email,
+      level: profile.level,
+      streak: profile.streak,
+      totalSessions: profile.total_sessions,
+      totalWords: 0,
+      avgWpm: 0
+    });
     setView("dashboard");
-    notify("Account created. Your reading journey begins now.");
-  };
+    notify("Welcome back! Ready to read faster?");
+  } catch(e) {
+    notify(e.message || "Login failed — check your email and password", "err");
+  }
+};
 
-  const guestLogin = () => {
-    setIsGuest(true);
-    setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0, totalWords:0, avgWpm:0 });
-    setView("dashboard");
-  };
+const signup = async (email, password, name) => {
+  try {
+    await signUp(email, password, name);
+    notify("Account created! Check your email to verify your account, then sign in.");
+  } catch(e) {
+    notify(e.message || "Signup failed — please try again", "err");
+  }
+};
 
-  const logout = () => { setUser(null); setIsGuest(false); setView("auth"); };
+const googleLogin = async () => {
+  try {
+    await signInWithGoogle();
+  } catch(e) {
+    notify("Google login failed — please try again", "err");
+  }
+};
+
+const guestLogin = () => {
+  setIsGuest(true);
+  setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0, totalWords:0, avgWpm:0 });
+  setView("dashboard");
+};
+
+const logout = async () => {
+  await signOut();
+  setUser(null);
+  setIsGuest(false);
+  setView("auth");
+};
 
   const startReading = (passage) => {
     setActivePassage(passage);
@@ -290,7 +352,7 @@ export default function App() {
   const dueCards = flashcards.filter(f => f.due <= Date.now()).length;
 
   // Layout
-  if (view === "auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} toast={toast} notify={notify} />;
+  if (view === "auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} toast={toast} notify={notify} />;
 
   const NAV = [
     { id:"dashboard", label:"Dashboard",  icon:"home"     },
@@ -374,17 +436,18 @@ export default function App() {
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH PAGE  — split screen, editorial
 // ─────────────────────────────────────────────────────────────────────────────
-function AuthPage({ onLogin, onSignup, onGuest }) {
+function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [name,  setName]  = useState("");
   const [pass,  setPass]  = useState("");
 
   const submit = () => {
-    if (!email.includes("@")) return;
-    if (mode==="login") onLogin(email, name||email.split("@")[0]);
-    else { if (!name) return; onSignup(email, name); }
-  };
+  if (!email.includes("@")) return;
+  if (!pass) return;
+  if (mode==="login") onLogin(email, pass);
+  else { if (!name) return; onSignup(email, pass, name); }
+};
 
   const inp = { width:"100%", padding:"12px 16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.card, color:T.text, fontSize:15, outline:"none", transition:"border-color 0.2s" };
 
@@ -455,9 +518,13 @@ function AuthPage({ onLogin, onSignup, onGuest }) {
           <div style={{ flex:1, height:1, background:T.border }} />
         </div>
 
-        <Btn variant="ghost" onClick={onGuest} style={{ width:"100%", justifyContent:"center" }}>
-          Continue as Guest
-        </Btn>
+        <Btn onClick={onGoogle} style={{ width:"100%", justifyContent:"center", marginBottom:8, background:"#fff", color:"#333", border:"1px solid #ddd" }}>
+  <span style={{fontSize:16}}>G</span> Continue with Google
+</Btn>
+
+<Btn variant="ghost" onClick={onGuest} style={{ width:"100%", justifyContent:"center" }}>
+  Continue as Guest
+</Btn>
 
         <p style={{ fontSize:11, color:T.text3, marginTop:24, lineHeight:1.7, textAlign:"center" }}>
           By continuing you agree to our Terms of Service and Privacy Policy.
