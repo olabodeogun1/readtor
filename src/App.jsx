@@ -3,17 +3,13 @@ import { signUp, signIn, signInWithGoogle, signOut, getSession, getProfile, ensu
 
 /* ─────────────────────────────────────────────────────────────────────────────
    READTOR  ·  Web Application
-   Aesthetic: Editorial dark — deep navy ink, warm amber accents, serif headlines
-   Layout: Fixed sidebar + wide content canvas, multi-column dashboard
 ───────────────────────────────────────────────────────────────────────────── */
 
-// ── Google Fonts injection ───────────────────────────────────────────────────
 const fontLink = document.createElement("link");
 fontLink.rel = "stylesheet";
 fontLink.href = "https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap";
 document.head.appendChild(fontLink);
 
-// ── CSS Reset + Variables ────────────────────────────────────────────────────
 const globalCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html { font-size: 16px; }
@@ -39,7 +35,6 @@ const styleEl = document.createElement("style");
 styleEl.textContent = globalCSS;
 document.head.appendChild(styleEl);
 
-// ── Tokens ───────────────────────────────────────────────────────────────────
 const T = {
   bg:      "#07080f",
   surface: "#0d0f1c",
@@ -61,7 +56,6 @@ const T = {
   mono:    "'DM Mono', monospace",
 };
 
-// ── Data ─────────────────────────────────────────────────────────────────────
 const LEVELS = [
   { n:1,  min:100, max:149, comp:60, title:"Novice"      },
   { n:2,  min:150, max:199, comp:62, title:"Beginner"    },
@@ -153,7 +147,6 @@ const QUIZZES = {
   ],
 };
 
-// ── AI Helper ─────────────────────────────────────────────────────────────────
 async function callClaude(prompt, system) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method:"POST",
@@ -169,7 +162,6 @@ async function callClaude(prompt, system) {
   return d.content?.map(b => b.text||"").join("") || "";
 }
 
-// ── Icon Component ─────────────────────────────────────────────────────────────
 const SVG = ({ d, size=18, stroke=T.text2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
     {Array.isArray(d) ? d.map((p,i) => <path key={i} d={p}/>) : <path d={d}/>}
@@ -194,7 +186,6 @@ const ICONS = {
   award:    ["M12 15l-3.78 2.31.95-4.3L5.83 9.8l4.39-.42L12 5.5l1.78 3.88 4.39.42-3.34 3.21.95 4.3z","M8.21 20.83l.9-4.08M15.79 20.83l-.9-4.08M12 22v-7"],
 };
 
-// ── Reusable Button ───────────────────────────────────────────────────────────
 const Btn = ({ children, onClick, variant="primary", disabled, style={}, size="md" }) => {
   const pad = size==="sm" ? "6px 14px" : size==="lg" ? "14px 28px" : "10px 20px";
   const fs  = size==="sm" ? 13 : size==="lg" ? 16 : 14;
@@ -215,7 +206,6 @@ const Btn = ({ children, onClick, variant="primary", disabled, style={}, size="m
   );
 };
 
-// ── Tag ────────────────────────────────────────────────────────────────────────
 const Tag = ({ label, color }) => (
   <span style={{ fontSize:11, padding:"3px 9px", borderRadius:20, background: color==="amber"?`${T.amber}22`:color==="teal"?`${T.teal}22`:`${T.border2}`, color: color==="amber"?T.amber:color==="teal"?T.teal:T.text3, fontWeight:600, letterSpacing:.3, flexShrink:0 }}>
     {label}
@@ -232,7 +222,7 @@ export default function App() {
   const [sessions, setSessions] = useState([]);
   const [flashcards, setFlashcards] = useState([]);
   const [activePassage, setActivePassage] = useState(null);
-  const [quizSession, setQuizSession] = useState(null); // {passage, sessionData}
+  const [quizSession, setQuizSession] = useState(null);
   const [lastResults, setLastResults] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -241,86 +231,86 @@ export default function App() {
     setTimeout(() => setToast(null), 3200);
   };
 
-// Check if user is already logged in when page loads
-useEffect(() => {
-  getSession().then(async session => {
-    if (session) {
-      try {
-        await ensureProfile(
-          session.user.id,
-          session.user.user_metadata?.name ||
-          session.user.user_metadata?.full_name,
-          session.user.email
-        );
-        const profile = await getProfile(session.user.id);
-        setUser({
-          id: session.user.id,
-          name: profile.name,
-          email: session.user.email,
-          level: profile.level,
-          streak: profile.streak,
-          totalSessions: profile.total_sessions,
-          totalWords: 0,
-          avgWpm: 0
-        });
-        setView("dashboard");
-      } catch(e) {
-        setView("auth");
+  // Check if user is already logged in when page loads
+  useEffect(() => {
+    getSession().then(async session => {
+      if (session) {
+        try {
+          await ensureProfile(
+            session.user.id,
+            session.user.user_metadata?.name || session.user.user_metadata?.full_name,
+            session.user.email
+          );
+          const profile = await getProfile(session.user.id);
+          setUser({
+            id: session.user.id,
+            name: profile.name,
+            email: session.user.email,
+            level: profile.level,
+            streak: profile.streak,
+            totalSessions: profile.total_sessions,
+            totalWords: 0,
+            avgWpm: 0
+          });
+          setView("dashboard");
+        } catch(e) {
+          setView("auth");
+        }
       }
-    }
-  });
-}, []);
-
-const login = async (email, password) => {
-  try {
-    const data = await signIn(email, password);
-    const profile = await getProfile(data.user.id);
-    setUser({
-      id: data.user.id,
-      name: profile.name,
-      email: data.user.email,
-      level: profile.level,
-      streak: profile.streak,
-      totalSessions: profile.total_sessions,
-      totalWords: 0,
-      avgWpm: 0
     });
+  }, []);
+
+  const login = async (email, password) => {
+    try {
+      const data = await signIn(email, password);
+      const profile = await getProfile(data.user.id);
+      setUser({
+        id: data.user.id,
+        name: profile.name,
+        email: data.user.email,
+        level: profile.level,
+        streak: profile.streak,
+        totalSessions: profile.total_sessions,
+        totalWords: 0,
+        avgWpm: 0
+      });
+      setView("dashboard");
+      notify("Welcome back! Ready to read faster?");
+    } catch(e) {
+      notify(e.message || "Login failed — check your email and password", "err");
+    }
+  };
+
+  // Returns a message string so AuthPage can display it directly on the form
+  const signup = async (email, password, name) => {
+    try {
+      await signUp(email, password, name);
+      return { success: true, message: "Account created! Check your email for a verification link, then sign in." };
+    } catch(e) {
+      return { success: false, message: e.message || "Signup failed — please try again" };
+    }
+  };
+
+  const googleLogin = async () => {
+    try {
+      await signInWithGoogle();
+    } catch(e) {
+      notify("Google login failed — please try again", "err");
+    }
+  };
+
+  const guestLogin = () => {
+    setIsGuest(true);
+    setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0, totalWords:0, avgWpm:0 });
     setView("dashboard");
-    notify("Welcome back! Ready to read faster?");
-  } catch(e) {
-    notify(e.message || "Login failed — check your email and password", "err");
-  }
-};
+  };
 
-const signup = async (email, password, name) => {
-  try {
-    await signUp(email, password, name);
-    notify("Account created! Check your email to verify your account, then sign in.");
-  } catch(e) {
-    notify(e.message || "Signup failed — please try again", "err");
-  }
-};
-
-const googleLogin = async () => {
-  try {
-    await signInWithGoogle();
-  } catch(e) {
-    notify("Google login failed — please try again", "err");
-  }
-};
-
-const guestLogin = () => {
-  setIsGuest(true);
-  setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0, totalWords:0, avgWpm:0 });
-  setView("dashboard");
-};
-
-const logout = async () => {
-  await signOut();
-  setUser(null);
-  setIsGuest(false);
-  setView("auth");
-};
+  const logout = async () => {
+    await signOut();
+    setUser(null);
+    setIsGuest(false);
+    setView("auth");
+  };
 
   const startReading = (passage) => {
     setActivePassage(passage);
@@ -351,8 +341,7 @@ const logout = async () => {
 
   const dueCards = flashcards.filter(f => f.due <= Date.now()).length;
 
-  // Layout
-  if (view === "auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} toast={toast} notify={notify} />;
+  if (view === "auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} />;
 
   const NAV = [
     { id:"dashboard", label:"Dashboard",  icon:"home"     },
@@ -364,16 +353,12 @@ const logout = async () => {
 
   return (
     <div style={{ display:"flex", minHeight:"100vh", background:T.bg }}>
-      {/* ── Sidebar ── */}
       {!["reading","quiz","results"].includes(view) && (
         <aside style={{ width:220, flexShrink:0, background:T.surface, borderRight:`1px solid ${T.border}`, display:"flex", flexDirection:"column", position:"fixed", left:0, top:0, bottom:0, zIndex:50 }}>
-          {/* Logo */}
           <div style={{ padding:"28px 20px 24px", borderBottom:`1px solid ${T.border}` }}>
             <div style={{ fontFamily:T.serif, fontSize:26, fontWeight:900, color:T.amber, letterSpacing:-0.5 }}>Readtor</div>
             <div style={{ fontSize:11, color:T.text3, marginTop:2, letterSpacing:.5 }}>Read · Absorb · Remember</div>
           </div>
-
-          {/* Nav */}
           <nav style={{ flex:1, padding:"16px 10px", display:"flex", flexDirection:"column", gap:2 }}>
             {NAV.map(n => {
               const active = view === n.id;
@@ -389,8 +374,6 @@ const logout = async () => {
               );
             })}
           </nav>
-
-          {/* User */}
           <div style={{ padding:"12px 10px 16px", borderTop:`1px solid ${T.border}` }}>
             <div style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px" }}>
               <div style={{ width:32, height:32, borderRadius:"50%", background:`linear-gradient(135deg,${T.amber},${T.amber2})`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, color:T.bg, flexShrink:0 }}>
@@ -411,7 +394,6 @@ const logout = async () => {
         </aside>
       )}
 
-      {/* ── Main ── */}
       <main style={{ flex:1, marginLeft: ["reading","quiz","results"].includes(view) ? 0 : 220, minHeight:"100vh", overflow:"auto" }}>
         {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} />}
         {view==="library"    && <LibraryView    onStart={startReading} />}
@@ -423,7 +405,6 @@ const logout = async () => {
         {view==="results"    && lastResults   && <ResultsView results={lastResults} onDone={() => setView("dashboard")} onFlashcards={() => setView("flashcards")} />}
       </main>
 
-      {/* ── Toast ── */}
       {toast && (
         <div style={{ position:"fixed", bottom:28, right:28, background: toast.type==="ok" ? T.card2 : `${T.red}22`, border:`1px solid ${toast.type==="ok" ? T.amber+"55" : T.red+"55"}`, color: toast.type==="ok" ? T.text : T.red, padding:"12px 20px", borderRadius:10, fontSize:14, zIndex:999, animation:"fadeUp 0.3s ease both", boxShadow:"0 8px 32px rgba(0,0,0,0.4)", maxWidth:340 }}>
           {toast.msg}
@@ -434,43 +415,65 @@ const logout = async () => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AUTH PAGE  — split screen, editorial
+// AUTH PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
-  const [mode, setMode] = useState("login");
-  const [email, setEmail] = useState("");
-  const [name,  setName]  = useState("");
-  const [pass,  setPass]  = useState("");
+  const [mode, setMode]       = useState("login");
+  const [email, setEmail]     = useState("");
+  const [name,  setName]      = useState("");
+  const [pass,  setPass]      = useState("");
+  const [loading, setLoading] = useState(false);
+  // This message shows directly on the form — never disappears until user acts
+  const [formMsg, setFormMsg] = useState({ text:"", type:"" });
 
-const submit = () => {
-  if (!email.includes("@")) { alert("Please enter a valid email"); return; }
-  if (!pass || pass.length < 6) { alert("Password must be at least 6 characters"); return; }
-  if (mode === "login") {
-    onLogin(email, pass);
-  } else {
-    if (!name || name.trim() === "") { alert("Please enter your name"); return; }
-    onSignup(email, pass, name);
-  }
-};
+  const switchMode = (m) => {
+    setMode(m);
+    setFormMsg({ text:"", type:"" });
+    setEmail("");
+    setName("");
+    setPass("");
+  };
+
+  const submit = async () => {
+    setFormMsg({ text:"", type:"" });
+    if (!email.includes("@")) { setFormMsg({ text:"Please enter a valid email address.", type:"err" }); return; }
+    if (!pass || pass.length < 6) { setFormMsg({ text:"Password must be at least 6 characters.", type:"err" }); return; }
+
+    setLoading(true);
+
+    if (mode === "login") {
+      await onLogin(email, pass);
+      setLoading(false);
+    } else {
+      if (!name || name.trim() === "") { setFormMsg({ text:"Please enter your full name.", type:"err" }); setLoading(false); return; }
+      const result = await onSignup(email, pass, name);
+      setLoading(false);
+      if (result.success) {
+        // Show big success message and switch to login tab
+        setFormMsg({ text: result.message, type:"ok" });
+        setMode("login");
+        setPass("");
+        setName("");
+      } else {
+        setFormMsg({ text: result.message, type:"err" });
+      }
+    }
+  };
 
   const inp = { width:"100%", padding:"12px 16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.card, color:T.text, fontSize:15, outline:"none", transition:"border-color 0.2s" };
 
   return (
     <div style={{ display:"flex", minHeight:"100vh" }}>
-      {/* Left panel — hero */}
+      {/* Left panel */}
       <div style={{ flex:1, background:`linear-gradient(160deg, #0d0f1c 0%, #07080f 60%)`, display:"flex", flexDirection:"column", justifyContent:"center", padding:"60px 64px", borderRight:`1px solid ${T.border}`, position:"relative", overflow:"hidden" }}>
-        {/* BG decoration */}
         <div style={{ position:"absolute", top:"-10%", right:"-5%", width:500, height:500, borderRadius:"50%", background:`radial-gradient(circle, ${T.amber}08 0%, transparent 70%)`, pointerEvents:"none" }} />
         <div style={{ position:"absolute", bottom:"-5%", left:"10%", width:300, height:300, borderRadius:"50%", background:`radial-gradient(circle, ${T.teal}06 0%, transparent 70%)`, pointerEvents:"none" }} />
-
         <div style={{ fontFamily:T.serif, fontSize:64, fontWeight:900, color:T.amber, letterSpacing:-2, lineHeight:1, marginBottom:16, animation:"fadeUp 0.6s ease both" }}>
           Read<span style={{ color:T.text }}>tor</span>
         </div>
         <div style={{ fontSize:20, color:T.text2, fontStyle:"italic", fontFamily:T.serif, marginBottom:48, animation:"fadeUp 0.6s 0.1s ease both", lineHeight:1.5 }}>
           Read faster.<br/>Think deeper.<br/>Remember more.
         </div>
-
-        {/* Stats */}
         <div style={{ display:"flex", gap:32, animation:"fadeUp 0.6s 0.2s ease both" }}>
           {[["10×","Reading modes"],["AI","Generated content"],["SM-2","Spaced repetition"]].map(([v,l]) => (
             <div key={v}>
@@ -479,8 +482,6 @@ const submit = () => {
             </div>
           ))}
         </div>
-
-        {/* Quote */}
         <div style={{ marginTop:64, padding:"24px 28px", borderLeft:`3px solid ${T.amber}55`, animation:"fadeUp 0.6s 0.3s ease both" }}>
           <div style={{ fontFamily:T.serif, fontSize:17, fontStyle:"italic", color:T.text2, lineHeight:1.7, marginBottom:10 }}>
             "A reader lives a thousand lives before he dies."
@@ -494,25 +495,45 @@ const submit = () => {
         <div style={{ fontFamily:T.serif, fontSize:28, fontWeight:700, color:T.text, marginBottom:6 }}>
           {mode==="login" ? "Welcome back" : "Begin your journey"}
         </div>
-        <div style={{ fontSize:14, color:T.text3, marginBottom:36 }}>
+        <div style={{ fontSize:14, color:T.text3, marginBottom:28 }}>
           {mode==="login" ? "Sign in to continue your practice" : "Create an account — it's free"}
         </div>
 
-        {/* Toggle */}
-        <div style={{ display:"flex", background:T.card, borderRadius:8, padding:4, marginBottom:28, border:`1px solid ${T.border}` }}>
+        {/* Tab toggle */}
+        <div style={{ display:"flex", background:T.card, borderRadius:8, padding:4, marginBottom:24, border:`1px solid ${T.border}` }}>
           {["login","signup"].map(m => (
-            <button key={m} onClick={() => setMode(m)} style={{ flex:1, padding:"9px", borderRadius:6, border:"none", background: mode===m ? T.amber : "transparent", color: mode===m ? T.bg : T.text2, fontWeight: mode===m ? 700 : 400, cursor:"pointer", fontSize:14, transition:"all 0.15s" }}>
+            <button key={m} onClick={() => switchMode(m)} style={{ flex:1, padding:"9px", borderRadius:6, border:"none", background: mode===m ? T.amber : "transparent", color: mode===m ? T.bg : T.text2, fontWeight: mode===m ? 700 : 400, cursor:"pointer", fontSize:14, transition:"all 0.15s" }}>
               {m==="login" ? "Sign In" : "Sign Up"}
             </button>
           ))}
         </div>
 
+        {/* Form message — shows success or error directly on form */}
+        {formMsg.text && (
+          <div style={{ padding:"14px 16px", borderRadius:8, marginBottom:16, fontSize:14, lineHeight:1.6, animation:"fadeUp 0.2s ease both",
+            background: formMsg.type==="ok" ? "#0d2e1f" : `${T.red}18`,
+            border: `1px solid ${formMsg.type==="ok" ? "#1a5c3a" : T.red+"55"}`,
+            color: formMsg.type==="ok" ? "#4ade80" : T.red,
+          }}>
+            {formMsg.type==="ok" ? "✅ " : "⚠️ "}{formMsg.text}
+          </div>
+        )}
+
         <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
-          {mode==="signup" && <input style={inp} placeholder="Full name" value={name} onChange={e=>setName(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />}
-          <input style={inp} placeholder="Email address" type="email" value={email} onChange={e=>setEmail(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
-          <input style={inp} placeholder="Password" type="password" value={pass} onChange={e=>setPass(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
-          <Btn onClick={submit} size="lg" style={{ width:"100%", justifyContent:"center", marginTop:4 }}>
-            {mode==="login" ? "Sign In →" : "Create Account →"}
+          {mode==="signup" && (
+            <input style={inp} placeholder="Full name" value={name} onChange={e=>setName(e.target.value)}
+              onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
+          )}
+          <input style={inp} placeholder="Email address" type="email" value={email} onChange={e=>setEmail(e.target.value)}
+            onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
+          <input style={inp} placeholder="Password (min 6 characters)" type="password" value={pass} onChange={e=>setPass(e.target.value)}
+            onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}
+            onKeyDown={e => { if(e.key==="Enter") submit(); }} />
+          <Btn onClick={submit} disabled={loading} size="lg" style={{ width:"100%", justifyContent:"center", marginTop:4 }}>
+            {loading
+              ? <><span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>✦</span> Please wait…</>
+              : mode==="login" ? "Sign In →" : "Create Account →"
+            }
           </Btn>
         </div>
 
@@ -522,13 +543,13 @@ const submit = () => {
           <div style={{ flex:1, height:1, background:T.border }} />
         </div>
 
-        <Btn onClick={onGoogle} style={{ width:"100%", justifyContent:"center", marginBottom:8, background:"#fff", color:"#333", border:"1px solid #ddd" }}>
-  <span style={{fontSize:16}}>G</span> Continue with Google
-</Btn>
+        <Btn onClick={onGoogle} style={{ width:"100%", justifyContent:"center", marginBottom:10, background:"#fff", color:"#333", border:"1px solid #ddd" }}>
+          <span style={{fontSize:16}}>G</span> Continue with Google
+        </Btn>
 
-<Btn variant="ghost" onClick={onGuest} style={{ width:"100%", justifyContent:"center" }}>
-  Continue as Guest
-</Btn>
+        <Btn variant="ghost" onClick={onGuest} style={{ width:"100%", justifyContent:"center" }}>
+          Continue as Guest
+        </Btn>
 
         <p style={{ fontSize:11, color:T.text3, marginTop:24, lineHeight:1.7, textAlign:"center" }}>
           By continuing you agree to our Terms of Service and Privacy Policy.
@@ -551,7 +572,6 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
 
   return (
     <div style={{ padding:"40px 48px", maxWidth:1200 }}>
-      {/* Header row */}
       <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:40, animation:"fadeUp 0.4s ease both" }}>
         <div>
           <div style={{ fontSize:13, color:T.text3, marginBottom:6, letterSpacing:.5 }}>
@@ -564,19 +584,17 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
             {isGuest ? "You're in guest mode — sign up to unlock everything." : `Level ${user?.level} · ${level.title} · ${user?.streak} day streak 🔥`}
           </p>
         </div>
-        {/* Quote */}
         <div style={{ maxWidth:320, padding:"16px 20px", background:T.card, border:`1px solid ${T.border}`, borderRadius:12, borderLeft:`3px solid ${T.amber}` }}>
           <div style={{ fontFamily:T.serif, fontSize:14, fontStyle:"italic", color:T.text2, lineHeight:1.6, marginBottom:8 }}>"{quote.q}"</div>
           <div style={{ fontSize:11, color:T.text3, letterSpacing:.3 }}>— {quote.a}</div>
         </div>
       </div>
 
-      {/* Stat cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:16, marginBottom:40 }}>
         {[
           { label:"Reading Level",  value: level.title, sub:`Level ${user?.level} of 10`, color:T.amber, icon:"⚡" },
           { label:"Current Streak", value:`${user?.streak}`, sub:"consecutive days", color:"#ff7043", icon:"🔥" },
-          { label:"Avg WPM",        value: avgWpm||"--",   sub:"words per minute",   color:T.teal,  icon:"📖" },
+          { label:"Avg WPM",        value: avgWpm||"--", sub:"words per minute", color:T.teal, icon:"📖" },
           { label:"Sessions",       value: user?.totalSessions||"0", sub:"total completed", color:"#a78bfa", icon:"✓" },
         ].map((s,i) => (
           <div key={s.label} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:14, padding:"22px 22px", animation:`fadeUp 0.4s ${0.05*i}s ease both` }}>
@@ -588,7 +606,6 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
         ))}
       </div>
 
-      {/* Level progress */}
       <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:14, padding:"24px 28px", marginBottom:32, animation:"fadeUp 0.4s 0.2s ease both" }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
           <div>
@@ -608,9 +625,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
         </div>
       </div>
 
-      {/* Two columns: recommended + quick actions */}
       <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:24, animation:"fadeUp 0.4s 0.25s ease both" }}>
-        {/* Recommended passages */}
         <div>
           <div style={{ fontFamily:T.serif, fontSize:20, fontWeight:700, color:T.text, marginBottom:16 }}>Recommended For You</div>
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
@@ -619,16 +634,14 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
             ))}
           </div>
         </div>
-
-        {/* Quick actions */}
         <div>
           <div style={{ fontFamily:T.serif, fontSize:20, fontWeight:700, color:T.text, marginBottom:16 }}>Quick Start</div>
           <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
             {[
-              { label:"Browse Library",    icon:"📚", desc:"Curated passages by level", view:"library" },
-              { label:"Generate with AI",  icon:"✨", desc:"Custom content at your level", view:"generate" },
-              { label:"Upload a Text",     icon:"📤", desc:"Practice with your own content", view:"upload" },
-              { label:`Flashcards ${dueCards > 0 ? `(${dueCards} due)`:``}`, icon:"🃏", desc:"Spaced repetition review", view:"flashcards" },
+              { label:"Browse Library",   icon:"📚", desc:"Curated passages by level",      view:"library"    },
+              { label:"Generate with AI", icon:"✨", desc:"Custom content at your level",   view:"generate"   },
+              { label:"Upload a Text",    icon:"📤", desc:"Practice with your own content", view:"upload"     },
+              { label:`Flashcards ${dueCards > 0 ? `(${dueCards} due)` : ""}`, icon:"🃏", desc:"Spaced repetition review", view:"flashcards" },
             ].map(a => (
               <button key={a.label} style={{ display:"flex", alignItems:"center", gap:14, padding:"14px 16px", background:T.card, border:`1px solid ${T.border}`, borderRadius:10, cursor:"pointer", textAlign:"left", transition:"all 0.15s" }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor=T.amber+"55"; e.currentTarget.style.background=T.amberGlow; }}
@@ -644,7 +657,6 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
         </div>
       </div>
 
-      {/* Recent sessions */}
       {sessions.length > 0 && (
         <div style={{ marginTop:40, animation:"fadeUp 0.4s 0.3s ease both" }}>
           <div style={{ fontFamily:T.serif, fontSize:20, fontWeight:700, color:T.text, marginBottom:16 }}>Recent Sessions</div>
@@ -676,7 +688,6 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
   );
 }
 
-// Passage row component
 function PassageRow({ passage, onStart }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:16, padding:"16px 20px", background:T.card, border:`1px solid ${T.border}`, borderRadius:12, transition:"all 0.15s", cursor:"pointer" }}
@@ -713,8 +724,6 @@ function LibraryView({ onStart }) {
         <h1 style={{ fontFamily:T.serif, fontSize:36, fontWeight:900, color:T.text, marginBottom:6 }}>Library</h1>
         <p style={{ color:T.text3, fontSize:15 }}>Curated passages organized by level, genre, and topic.</p>
       </div>
-
-      {/* Filters */}
       <div style={{ display:"flex", gap:12, alignItems:"center", marginBottom:28, animation:"fadeUp 0.4s 0.05s ease both" }}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search passages..." style={{ padding:"10px 16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.card, color:T.text, fontSize:14, outline:"none", width:260 }} />
         <div style={{ display:"flex", gap:6 }}>
@@ -725,8 +734,6 @@ function LibraryView({ onStart }) {
           ))}
         </div>
       </div>
-
-      {/* Grid */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(340px, 1fr))", gap:20 }}>
         {filtered.map((p, i) => (
           <div key={p.id} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:14, padding:"24px", display:"flex", flexDirection:"column", gap:16, animation:`fadeUp 0.4s ${0.04*i}s ease both`, transition:"border-color 0.15s", cursor:"pointer" }}
@@ -738,9 +745,7 @@ function LibraryView({ onStart }) {
                 <div style={{ fontFamily:T.serif, fontSize:18, fontWeight:700, color:T.text, lineHeight:1.3 }}>{p.title}</div>
                 <Tag label={`Lv ${p.level}`} color="amber" />
               </div>
-              <div style={{ fontSize:13, color:T.text3, lineHeight:1.6 }}>
-                {p.text.slice(0,120)}...
-              </div>
+              <div style={{ fontSize:13, color:T.text3, lineHeight:1.6 }}>{p.text.slice(0,120)}...</div>
             </div>
             <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
               <Tag label={p.genre} />
@@ -758,7 +763,7 @@ function LibraryView({ onStart }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// READING VIEW  — full-screen immersive reader
+// READING VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function ReadingView({ passage, onFinish, onExit }) {
   const [mode, setMode]         = useState("highlight");
@@ -803,14 +808,12 @@ function ReadingView({ passage, onFinish, onExit }) {
     onFinish({ passage, wpm:actualWpm, comp:0, wordsRead:wordIdx, timeSeconds:t, ts:Date.now() });
   };
 
-  // Highlight mode chunks
   const CHUNK = 6;
   const chunks = [];
   for (let i=0; i<words.length; i+=CHUNK) chunks.push({ words: words.slice(i,i+CHUNK), start:i, active: wordIdx>=i && wordIdx<i+CHUNK });
 
   return (
     <div style={{ display:"flex", flexDirection:"column", height:"100vh", background:T.bg }}>
-      {/* Top bar */}
       <div style={{ padding:"14px 32px", borderBottom:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:20, flexShrink:0 }}>
         <button onClick={onExit} style={{ background:"none", border:"none", cursor:"pointer", color:T.text3, fontSize:13, display:"flex", alignItems:"center", gap:6 }}
           onMouseEnter={e=>e.currentTarget.style.color=T.red}
@@ -829,64 +832,44 @@ function ReadingView({ passage, onFinish, onExit }) {
           </div>
         </div>
       </div>
-
-      {/* Progress bar */}
       <div style={{ height:3, background:T.card, flexShrink:0 }}>
         <div style={{ height:"100%", background:`linear-gradient(90deg,${T.amber},${T.amber2})`, width:`${progress}%`, transition:"width 0.2s" }} />
       </div>
-
-      {/* Mode + controls strip */}
       <div style={{ padding:"12px 32px", borderBottom:`1px solid ${T.border}`, background:T.surface, display:"flex", alignItems:"center", gap:16, flexShrink:0 }}>
-        {/* Mode tabs */}
         <div style={{ display:"flex", gap:4 }}>
           {[["highlight","Highlight"],["rsvp","RSVP"],["scroll","Scroll"]].map(([m,l]) => (
             <button key={m} onClick={() => { setMode(m); setPlaying(false); setWordIdx(0); }} style={{ padding:"6px 14px", borderRadius:6, border:`1px solid ${mode===m ? T.amber : T.border}`, background: mode===m ? T.amberGlow : "transparent", color: mode===m ? T.amber : T.text3, cursor:"pointer", fontSize:13, fontWeight: mode===m ? 600 : 400, transition:"all 0.15s" }}>{l}</button>
           ))}
         </div>
-
         <div style={{ height:20, width:1, background:T.border }} />
-
-        {/* Speed */}
         <div style={{ display:"flex", alignItems:"center", gap:10, flex:1 }}>
           <span style={{ fontSize:12, color:T.text3, whiteSpace:"nowrap" }}>Speed</span>
           <input type="range" min={80} max={900} step={10} value={wpm} onChange={e=>setWpm(+e.target.value)} style={{ flex:1, maxWidth:220, accentColor:T.amber }} />
           <span style={{ fontFamily:T.mono, fontSize:14, color:T.text2, minWidth:70 }}>{wpm} wpm</span>
         </div>
-
         <div style={{ height:20, width:1, background:T.border }} />
-
-        {/* Font size */}
         <div style={{ display:"flex", alignItems:"center", gap:8 }}>
           <span style={{ fontSize:12, color:T.text3 }}>Font</span>
           <button onClick={() => setFontSize(f=>Math.max(14,f-2))} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:4, width:28, height:28, cursor:"pointer", color:T.text2, fontSize:14 }}>−</button>
           <button onClick={() => setFontSize(f=>Math.min(32,f+2))} style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:4, width:28, height:28, cursor:"pointer", color:T.text2, fontSize:14 }}>+</button>
         </div>
-
         <div style={{ height:20, width:1, background:T.border }} />
-
-        {/* Play / Finish */}
         <div style={{ display:"flex", gap:8 }}>
           {mode !== "scroll" && (
             <Btn onClick={() => setPlaying(p=>!p)} variant={playing ? "secondary":"primary"} size="sm">
               {playing ? <>⏸ Pause</> : <>▶ Play</>}
             </Btn>
           )}
-          <Btn onClick={finish} variant="teal" size="sm">
-            Finish & Quiz →
-          </Btn>
+          <Btn onClick={finish} variant="teal" size="sm">Finish & Quiz →</Btn>
         </div>
       </div>
-
-      {/* Reading area */}
       <div style={{ flex:1, overflow:"auto", display:"flex", alignItems: mode==="rsvp" ? "center":"flex-start", justifyContent:"center" }}>
         {mode==="rsvp" && (
           <div style={{ textAlign:"center", padding:40 }}>
             <div style={{ fontFamily:T.serif, fontSize:Math.max(48, fontSize*2.5), color:T.text, minHeight:100, display:"flex", alignItems:"center", justifyContent:"center", letterSpacing:-0.5, animation:"rsvpIn 0.25s ease both" }} key={wordIdx}>
               <span style={{ color:T.amber }}>{words[wordIdx]}</span>
             </div>
-            <div style={{ fontSize:13, color:T.text3, marginTop:24, fontFamily:T.mono }}>
-              {wordIdx+1} / {words.length} words
-            </div>
+            <div style={{ fontSize:13, color:T.text3, marginTop:24, fontFamily:T.mono }}>{wordIdx+1} / {words.length} words</div>
           </div>
         )}
         {mode==="highlight" && (
@@ -920,7 +903,6 @@ function QuizView({ passage, sessionData, onSubmit, onExit }) {
   const questions = QUIZZES[passage.id] || QUIZZES.p1;
   const [answers, setAnswers] = useState({});
   const [current, setCurrent] = useState(0);
-  const [submitted, setSubmitted] = useState(false);
   const q = questions[current];
 
   const submit = () => {
@@ -936,9 +918,7 @@ function QuizView({ passage, sessionData, onSubmit, onExit }) {
 
   return (
     <div style={{ display:"flex", height:"100vh", background:T.bg }}>
-      {/* Left — question panel */}
       <div style={{ flex:1, display:"flex", flexDirection:"column", padding:"48px 56px", overflowY:"auto" }}>
-        {/* Header */}
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:40 }}>
           <div>
             <div style={{ fontFamily:T.serif, fontSize:28, fontWeight:900, color:T.text }}>Comprehension Quiz</div>
@@ -950,21 +930,16 @@ function QuizView({ passage, sessionData, onSubmit, onExit }) {
             Skip quiz
           </button>
         </div>
-
-        {/* Progress dots */}
         <div style={{ display:"flex", gap:8, marginBottom:36 }}>
           {questions.map((_,i) => (
             <div key={i} onClick={() => setCurrent(i)} style={{ flex:1, height:5, borderRadius:3, cursor:"pointer", background: answers[questions[i].id]!==undefined ? T.amber : i===current ? T.teal : T.card2, transition:"background 0.2s" }} />
           ))}
         </div>
-
-        {/* Question */}
         <div style={{ animation:"fadeIn 0.25s ease both" }} key={q.id}>
           <div style={{ fontSize:11, color:T.amber, letterSpacing:1, fontWeight:700, textTransform:"uppercase", marginBottom:12 }}>
             Question {current+1} of {questions.length} · {q.type==="tf" ? "True / False" : "Multiple Choice"}
           </div>
           <div style={{ fontFamily:T.serif, fontSize:22, lineHeight:1.6, color:T.text, marginBottom:32 }}>{q.q}</div>
-
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
             {q.choices.map((c,i) => {
               const sel = answers[q.id]===i;
@@ -981,8 +956,6 @@ function QuizView({ passage, sessionData, onSubmit, onExit }) {
             })}
           </div>
         </div>
-
-        {/* Navigation */}
         <div style={{ display:"flex", gap:12, marginTop:40 }}>
           {current>0 && <Btn variant="secondary" onClick={()=>setCurrent(c=>c-1)}>← Previous</Btn>}
           {current < questions.length-1
@@ -991,13 +964,10 @@ function QuizView({ passage, sessionData, onSubmit, onExit }) {
           }
         </div>
       </div>
-
-      {/* Right — passage preview */}
       <div style={{ width:380, flexShrink:0, borderLeft:`1px solid ${T.border}`, padding:"48px 32px", overflowY:"auto", background:T.surface }}>
         <div style={{ fontSize:13, color:T.text3, marginBottom:16, fontWeight:600, letterSpacing:.5, textTransform:"uppercase" }}>Passage Reference</div>
         <div style={{ fontFamily:T.serif, fontSize:15, lineHeight:1.9, color:T.text2 }}>
-          {passage.text.slice(0,600)}
-          <span style={{ color:T.text3 }}>…</span>
+          {passage.text.slice(0,600)}<span style={{ color:T.text3 }}>…</span>
         </div>
         {sessionData && (
           <div style={{ marginTop:24, padding:"14px 16px", background:T.card, borderRadius:10, border:`1px solid ${T.border}` }}>
@@ -1022,20 +992,16 @@ function ResultsView({ results, onDone, onFlashcards }) {
 
   return (
     <div style={{ padding:"48px 64px", maxWidth:1000, animation:"fadeUp 0.4s ease both" }}>
-      {/* Hero */}
       <div style={{ display:"flex", gap:48, marginBottom:48 }}>
         <div style={{ flex:1 }}>
           <div style={{ fontSize:56, marginBottom:16 }}>{grade[0]}</div>
           <div style={{ fontFamily:T.serif, fontSize:40, fontWeight:900, color:grade[2], letterSpacing:-1, marginBottom:8 }}>{grade[1]}</div>
           <div style={{ fontSize:16, color:T.text2, marginBottom:32 }}>You answered {correct} of {total} questions correctly on <em>{passage.title}</em>.</div>
-
           <div style={{ display:"flex", gap:16 }}>
             <Btn size="lg" onClick={onDone}>Back to Dashboard</Btn>
             {missed.length>0 && <Btn variant="secondary" size="lg" onClick={onFlashcards}>📇 Add {missed.length} to Flashcards</Btn>}
           </div>
         </div>
-
-        {/* Score ring */}
         <div style={{ width:200, flexShrink:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", background:T.card, border:`1px solid ${T.border}`, borderRadius:20, padding:32 }}>
           <div style={{ fontFamily:T.serif, fontSize:72, fontWeight:900, color:grade[2], lineHeight:1 }}>{score}</div>
           <div style={{ fontSize:16, color:T.text3, marginTop:4 }}>out of 100</div>
@@ -1047,8 +1013,6 @@ function ResultsView({ results, onDone, onFlashcards }) {
           )}
         </div>
       </div>
-
-      {/* Missed questions review */}
       {missed.length > 0 && (
         <div>
           <div style={{ fontFamily:T.serif, fontSize:22, fontWeight:700, color:T.text, marginBottom:16 }}>Review Missed Questions</div>
@@ -1066,8 +1030,6 @@ function ResultsView({ results, onDone, onFlashcards }) {
           </div>
         </div>
       )}
-
-      {/* Encouragement */}
       <div style={{ marginTop:40, padding:"20px 24px", background:T.amberGlow, border:`1px solid ${T.amber}33`, borderRadius:12 }}>
         <div style={{ fontFamily:T.serif, fontSize:16, fontStyle:"italic", color:T.text2, lineHeight:1.7 }}>
           {score>=70 ? `Excellent session! You read ${passage.wordCount} words${sessionData ? ` at ${sessionData.wpm} WPM` : ""}. One more session today to strengthen your streak.` : `Every passage you read builds your vocabulary and comprehension. Come back tomorrow — consistency beats intensity.`}
@@ -1129,13 +1091,11 @@ function GenerateView({ user, isGuest, onStart, notify }) {
         <h1 style={{ fontFamily:T.serif, fontSize:36, fontWeight:900, color:T.text, marginBottom:6 }}>AI Generate</h1>
         <p style={{ color:T.text3, fontSize:15 }}>Create custom passages tuned to your level and interests using Claude AI.</p>
       </div>
-
       {isGuest && (
         <div style={{ padding:"14px 18px", background:`${T.red}11`, border:`1px solid ${T.red}33`, borderRadius:10, marginBottom:28, fontSize:14, color:T.red, animation:"fadeUp 0.4s ease both" }}>
           ⚠️ AI generation requires an account. Sign up — it's free.
         </div>
       )}
-
       <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:16, padding:"32px 36px", animation:"fadeUp 0.4s 0.05s ease both" }}>
         <SelectGroup label="Genre" value={genre} onChange={setGenre}
           options={[{v:"fiction",l:"Short Fiction"},{v:"academic",l:"Academic"},{v:"vocabulary",l:"High Vocabulary"}]} />
@@ -1143,20 +1103,14 @@ function GenerateView({ user, isGuest, onStart, notify }) {
           options={LEVELS.map(l=>({v:l.n,l:`${l.n} — ${l.title}`}))} />
         <SelectGroup label="Length" value={length} onChange={setLength}
           options={[{v:150,l:"Short (150w)"},{v:300,l:"Medium (300w)"},{v:500,l:"Long (500w)"}]} />
-
         <div style={{ marginBottom:32 }}>
           <div style={{ fontSize:12, color:T.text3, fontWeight:600, letterSpacing:.8, textTransform:"uppercase", marginBottom:10 }}>Topic (optional)</div>
           <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="e.g. deep-sea exploration, ancient Rome, quantum mechanics…" style={{ width:"100%", padding:"13px 16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.surface, color:T.text, fontSize:15, outline:"none", transition:"border-color 0.2s" }} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
         </div>
-
         <Btn size="lg" onClick={generate} disabled={loading} style={{ width:"100%", justifyContent:"center" }}>
-          {loading
-            ? <><span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>✦</span> Generating…</>
-            : <>✨ Generate Passage</>}
+          {loading ? <><span style={{ animation:"spin 1s linear infinite", display:"inline-block" }}>✦</span> Generating…</> : <>✨ Generate Passage</>}
         </Btn>
       </div>
-
-      {/* Prompt preview */}
       <div style={{ marginTop:24, padding:"18px 22px", background:T.card, border:`1px solid ${T.border}`, borderRadius:10, animation:"fadeUp 0.4s 0.1s ease both" }}>
         <div style={{ fontSize:11, color:T.text3, fontWeight:600, letterSpacing:.8, textTransform:"uppercase", marginBottom:8 }}>Example Prompts Used</div>
         <div style={{ fontSize:13, color:T.text3, lineHeight:1.8, fontFamily:T.mono }}>
@@ -1173,7 +1127,7 @@ function GenerateView({ user, isGuest, onStart, notify }) {
 // FLASHCARDS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function FlashcardsView({ flashcards, setFlashcards }) {
-  const [idx, setIdx]       = useState(0);
+  const [idx, setIdx]         = useState(0);
   const [flipped, setFlipped] = useState(false);
   const due = flashcards.filter(f => f.due <= Date.now());
 
@@ -1193,7 +1147,6 @@ function FlashcardsView({ flashcards, setFlashcards }) {
         <h1 style={{ fontFamily:T.serif, fontSize:36, fontWeight:900, color:T.text, marginBottom:6 }}>Flashcards</h1>
         <p style={{ color:T.text3, fontSize:15 }}>Spaced repetition for long-term retention. {due.length} card{due.length!==1?"s":""} due for review.</p>
       </div>
-
       {due.length === 0 ? (
         <div style={{ textAlign:"center", padding:"80px 40px", background:T.card, border:`1px solid ${T.border}`, borderRadius:20 }}>
           <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
@@ -1202,7 +1155,6 @@ function FlashcardsView({ flashcards, setFlashcards }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:40, maxWidth:900 }}>
-          {/* Card */}
           <div style={{ display:"flex", flexDirection:"column" }}>
             <div onClick={() => setFlipped(f=>!f)} style={{ background:T.card, border:`2px solid ${flipped ? T.amber : T.border}`, borderRadius:20, padding:"48px 40px", minHeight:280, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", cursor:"pointer", transition:"all 0.25s", textAlign:"center" }}
               onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"55"}
@@ -1215,20 +1167,13 @@ function FlashcardsView({ flashcards, setFlashcards }) {
               </div>
               {!flipped && <div style={{ fontSize:12, color:T.text3, marginTop:24 }}>Click to reveal answer</div>}
             </div>
-
             {flipped && (
               <div style={{ display:"flex", gap:12, marginTop:16, animation:"fadeUp 0.2s ease both" }}>
-                <Btn variant="danger" onClick={() => review(false)} style={{ flex:1, justifyContent:"center" }}>
-                  😕 Forgot
-                </Btn>
-                <Btn variant="teal" onClick={() => review(true)} style={{ flex:1, justifyContent:"center" }}>
-                  ✓ Got it
-                </Btn>
+                <Btn variant="danger" onClick={() => review(false)} style={{ flex:1, justifyContent:"center" }}>😕 Forgot</Btn>
+                <Btn variant="teal" onClick={() => review(true)} style={{ flex:1, justifyContent:"center" }}>✓ Got it</Btn>
               </div>
             )}
           </div>
-
-          {/* Stats sidebar */}
           <div>
             <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:14, padding:"24px", marginBottom:16 }}>
               <div style={{ fontSize:12, color:T.text3, letterSpacing:.5, textTransform:"uppercase", marginBottom:16, fontWeight:600 }}>Queue</div>
@@ -1269,25 +1214,20 @@ function UploadView({ onStart, notify }) {
         <h1 style={{ fontFamily:T.serif, fontSize:36, fontWeight:900, color:T.text, marginBottom:6 }}>Upload Text</h1>
         <p style={{ color:T.text3, fontSize:15 }}>Paste any text to practice with your own content — articles, essays, chapters.</p>
       </div>
-
       <div style={{ background:T.card, border:`1px solid ${T.border}`, borderRadius:16, padding:"32px", animation:"fadeUp 0.4s 0.05s ease both" }}>
         <div style={{ marginBottom:20 }}>
           <label style={{ fontSize:12, color:T.text3, fontWeight:600, letterSpacing:.8, textTransform:"uppercase", display:"block", marginBottom:8 }}>Title</label>
           <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. Chapter 3 — The Origin of Species" style={{ width:"100%", padding:"12px 16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.surface, color:T.text, fontSize:15, outline:"none" }} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
         </div>
-
         <div style={{ marginBottom:20 }}>
           <label style={{ fontSize:12, color:T.text3, fontWeight:600, letterSpacing:.8, textTransform:"uppercase", display:"block", marginBottom:8 }}>
             Paste Text <span style={{ color:T.text3, textTransform:"none", letterSpacing:0, fontSize:11 }}>· {wordCount} words · {wordCount>=50 ? "✓ ready" : `need ${50-wordCount} more`}</span>
           </label>
           <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Paste your text here (minimum 50 words)…" style={{ width:"100%", height:320, padding:"16px", borderRadius:8, border:`1px solid ${T.border2}`, background:T.surface, color:T.text, fontSize:16, fontFamily:T.serif, lineHeight:1.8, resize:"vertical", outline:"none" }} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} />
         </div>
-
         <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
           <div style={{ fontSize:13, color:T.text3 }}>Supports plain text paste · PDF and DOCX import in full version</div>
-          <Btn size="lg" onClick={start} disabled={wordCount<50}>
-            Start Session →
-          </Btn>
+          <Btn size="lg" onClick={start} disabled={wordCount<50}>Start Session →</Btn>
         </div>
       </div>
     </div>
