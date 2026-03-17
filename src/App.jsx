@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { signUp, signIn, signInWithGoogle, signOut, getSession, getProfile, ensureProfile } from './auth';
+import { supabase } from './supabaseClient';
 
 const fontLink = document.createElement("link");
 fontLink.rel = "stylesheet";
@@ -201,7 +202,7 @@ const QUIZZES = {
   ],
 };
 
-// ── Pollinations AI — free, no key needed ─────────────────────────────────────
+// ── Pollinations AI ───────────────────────────────────────────────────────────
 async function generateWithAI(prompt) {
   const system = "You are a reading education assistant. Generate high-quality engaging passages for reading practice. Return ONLY the passage text itself — no title, no label, no preamble, no commentary. Just the passage.";
   const full = encodeURIComponent(`${system}\n\n${prompt}`);
@@ -212,7 +213,57 @@ async function generateWithAI(prompt) {
   return text.trim();
 }
 
-// ── Icons & UI primitives ─────────────────────────────────────────────────────
+// ── Supabase session helpers ──────────────────────────────────────────────────
+
+// Fetch all sessions for a user, newest first
+async function fetchSessions(userId) {
+  const { data, error } = await supabase
+    .from("sessions")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  // Normalise DB rows → app shape
+  return (data || []).map(row => ({
+    id:          row.id,
+    passage:     { title: row.passage_title, id: "db", wordCount: row.words_read },
+    wpm:         row.wpm,
+    comp:        row.comprehension,
+    wordsRead:   row.words_read,
+    timeSeconds: row.time_seconds,
+    ts:          new Date(row.created_at).getTime(),
+  }));
+}
+
+// Save one session after a quiz is submitted
+async function saveSession(userId, { passage, wpm, comp, wordsRead, timeSeconds }) {
+  const { error } = await supabase.from("sessions").insert({
+    user_id:       userId,
+    passage_title: passage.title,
+    wpm:           wpm,
+    words_read:    wordsRead,
+    comprehension: comp || 0,
+    time_seconds:  timeSeconds,
+  });
+  if (error) throw error;
+}
+
+// Update profile totals after a session
+async function incrementProfile(userId) {
+  // Fetch current totals first
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("total_sessions, streak")
+    .eq("id", userId)
+    .single();
+  if (!profile) return;
+  await supabase.from("profiles").update({
+    total_sessions: (profile.total_sessions || 0) + 1,
+    streak:         (profile.streak || 0) + 1,
+  }).eq("id", userId);
+}
+
+// ── Icons & primitives ────────────────────────────────────────────────────────
 const SVG = ({ d, size=18, stroke=T.text2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
     {Array.isArray(d) ? d.map((p,i)=><path key={i} d={p}/>) : <path d={d}/>}
@@ -271,50 +322,120 @@ export default function App() {
 
   const notify = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3200); };
 
+  // ── Load user + sessions on mount (handles page refresh / Google OAuth) ──
   useEffect(() => {
     getSession().then(async session => {
       if (session) {
         try {
-          await ensureProfile(session.user.id, session.user.user_metadata?.name||session.user.user_metadata?.full_name, session.user.email);
+          await ensureProfile(
+            session.user.id,
+            session.user.user_metadata?.name || session.user.user_metadata?.full_name,
+            session.user.email
+          );
           const profile = await getProfile(session.user.id);
-          setUser({id:session.user.id,name:profile.name,email:session.user.email,level:profile.level,streak:profile.streak,totalSessions:profile.total_sessions,totalWords:0,avgWpm:0});
+          setUser({
+            id: session.user.id,
+            name: profile.name,
+            email: session.user.email,
+            level: profile.level,
+            streak: profile.streak,
+            totalSessions: profile.total_sessions,
+          });
+          // ★ Load all past sessions from DB
+          const past = await fetchSessions(session.user.id);
+          setSessions(past);
           setView("dashboard");
         } catch(e) { setView("auth"); }
       }
     });
   }, []);
 
+  // ── Auth helpers ──────────────────────────────────────────────────────────
   const login = async (email, password) => {
     try {
       const data = await signIn(email, password);
       const profile = await getProfile(data.user.id);
-      setUser({id:data.user.id,name:profile.name,email:data.user.email,level:profile.level,streak:profile.streak,totalSessions:profile.total_sessions,totalWords:0,avgWpm:0});
-      setView("dashboard"); notify("Welcome back! Ready to read faster?");
-    } catch(e) { notify(e.message||"Login failed — check your email and password","err"); }
+      setUser({
+        id: data.user.id,
+        name: profile.name,
+        email: data.user.email,
+        level: profile.level,
+        streak: profile.streak,
+        totalSessions: profile.total_sessions,
+      });
+      // ★ Load all past sessions
+      const past = await fetchSessions(data.user.id);
+      setSessions(past);
+      setView("dashboard");
+      notify("Welcome back! Ready to read faster?");
+    } catch(e) { notify(e.message || "Login failed — check your email and password", "err"); }
   };
 
   const signup = async (email, password, name) => {
-    try { await signUp(email, password, name); return {success:true, message:"Account created! Sign in to get started."}; }
-    catch(e) { return {success:false, message:e.message||"Signup failed — please try again"}; }
+    try { await signUp(email, password, name); return { success:true, message:"Account created! Sign in to get started." }; }
+    catch(e) { return { success:false, message:e.message || "Signup failed — please try again" }; }
   };
 
   const googleLogin = async () => {
-    try { await signInWithGoogle(); } catch(e) { notify("Google login failed — please try again","err"); }
+    try { await signInWithGoogle(); } catch(e) { notify("Google login failed — please try again", "err"); }
   };
 
-  const guestLogin = () => { setIsGuest(true); setUser({id:"guest",name:"Guest Reader",level:1,streak:0,totalSessions:0,totalWords:0,avgWpm:0}); setView("dashboard"); };
-  const logout     = async () => { await signOut(); setUser(null); setIsGuest(false); setView("auth"); };
+  const guestLogin = () => {
+    setIsGuest(true);
+    setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0 });
+    setView("dashboard");
+  };
 
-  const startReading  = (passage)     => { setActivePassage(passage); setView("reading"); };
-  const finishReading = (sessionData) => { setSessions(prev=>[sessionData,...prev]); setQuizSession({passage:sessionData.passage,sessionData}); setView("quiz"); };
+  const logout = async () => {
+    await signOut();
+    setUser(null); setIsGuest(false); setSessions([]); setView("auth");
+  };
 
-  const submitQuiz = (results) => {
+  // ── Reading / quiz flow ───────────────────────────────────────────────────
+  const startReading  = passage => { setActivePassage(passage); setView("reading"); };
+  const finishReading = sessionData => {
+    setQuizSession({ passage: sessionData.passage, sessionData });
+    setView("quiz");
+  };
+
+  const submitQuiz = async (results) => {
     setLastResults(results);
+
+    // Add missed questions as flashcards
     if (results.missed.length > 0) {
-      const cards = results.missed.map(q=>({id:`${Date.now()}-${Math.random()}`,question:q.q,answer:q.exp,due:Date.now(),interval:1}));
-      setFlashcards(prev=>[...prev,...cards]);
+      const cards = results.missed.map(q => ({
+        id:`${Date.now()}-${Math.random()}`, question:q.q, answer:q.exp, due:Date.now(), interval:1,
+      }));
+      setFlashcards(prev => [...prev, ...cards]);
     }
-    if (user) setUser(prev=>({...prev,totalSessions:prev.totalSessions+1,streak:prev.streak+1}));
+
+    if (!isGuest && user?.id) {
+      // ★ Save session to Supabase
+      try {
+        await saveSession(user.id, {
+          ...results.sessionData,
+          comp: results.score,
+        });
+        await incrementProfile(user.id);
+        // ★ Refresh sessions list and user profile totals from DB
+        const past = await fetchSessions(user.id);
+        setSessions(past);
+        const profile = await getProfile(user.id);
+        setUser(prev => ({
+          ...prev,
+          totalSessions: profile.total_sessions,
+          streak: profile.streak,
+        }));
+      } catch(e) {
+        console.error("Failed to save session:", e);
+        notify("Session couldn't be saved — check your connection.", "err");
+      }
+    } else {
+      // Guest: just prepend locally
+      setSessions(prev => [results.sessionData, ...prev]);
+      setUser(prev => prev ? { ...prev, totalSessions: (prev.totalSessions||0)+1, streak: (prev.streak||0)+1 } : prev);
+    }
+
     setView("results");
   };
 
@@ -322,11 +443,11 @@ export default function App() {
   if (view==="auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} />;
 
   const NAV = [
-    {id:"dashboard", label:"Dashboard",   icon:"home"    },
-    {id:"library",   label:"Library",     icon:"library" },
-    {id:"generate",  label:"AI Generate", icon:"generate"},
-    {id:"flashcards",label:"Flashcards",  icon:"cards",   badge:dueCards},
-    {id:"upload",    label:"Upload",      icon:"upload"  },
+    { id:"dashboard", label:"Dashboard",   icon:"home"     },
+    { id:"library",   label:"Library",     icon:"library"  },
+    { id:"generate",  label:"AI Generate", icon:"generate" },
+    { id:"flashcards",label:"Flashcards",  icon:"cards",   badge:dueCards },
+    { id:"upload",    label:"Upload",      icon:"upload"   },
   ];
 
   return (
@@ -420,7 +541,6 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
 
   return (
     <div style={{display:"flex",minHeight:"100vh"}}>
-      {/* Left hero panel */}
       <div style={{flex:1,background:`linear-gradient(160deg,#0d0f1c 0%,#07080f 60%)`,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",borderRight:`1px solid ${T.border}`,position:"relative",overflow:"hidden"}}>
         <div style={{position:"absolute",top:"-10%",right:"-5%",width:500,height:500,borderRadius:"50%",background:`radial-gradient(circle,${T.amber}08 0%,transparent 70%)`,pointerEvents:"none"}}/>
         <div style={{fontFamily:T.serif,fontSize:64,fontWeight:900,color:T.amber,letterSpacing:-2,lineHeight:1,marginBottom:16,animation:"fadeUp 0.6s ease both"}}>Read<span style={{color:T.text}}>tor</span></div>
@@ -435,7 +555,6 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
           <div style={{fontSize:12,color:T.text3,letterSpacing:.5}}>— George R.R. Martin</div>
         </div>
       </div>
-      {/* Right form panel */}
       <div style={{width:440,flexShrink:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 48px",background:T.surface}}>
         <div style={{fontFamily:T.serif,fontSize:28,fontWeight:700,color:T.text,marginBottom:6}}>{mode==="login"?"Welcome back":"Begin your journey"}</div>
         <div style={{fontSize:14,color:T.text3,marginBottom:28}}>{mode==="login"?"Sign in to continue your practice":"Create an account — it's free"}</div>
@@ -466,7 +585,7 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
           <span style={{fontSize:16}}>G</span> Continue with Google
         </Btn>
         <Btn variant="ghost" onClick={onGuest} style={{width:"100%",justifyContent:"center"}}>Continue as Guest</Btn>
-        <p style={{fontSize:11,color:T.text3,marginTop:24,lineHeight:1.7,textAlign:"center"}}>By continuing you agree to our Terms of Service and Privacy Policy. Readtor is safe for ages 13+.</p>
+        <p style={{fontSize:11,color:T.text3,marginTop:24,lineHeight:1.7,textAlign:"center"}}>By continuing you agree to our Terms of Service and Privacy Policy.</p>
       </div>
     </div>
   );
@@ -478,7 +597,8 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
 function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
   const level    = LEVELS[(user?.level||1)-1];
   const quote    = QUOTES[new Date().getDate()%QUOTES.length];
-  const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+x.wpm,0)/sessions.length) : 0;
+  const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.wpm||0),0)/sessions.length) : 0;
+  const avgComp  = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.comp||0),0)/sessions.length) : 0;
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
 
   return (
@@ -487,7 +607,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
         <div>
           <div style={{fontSize:13,color:T.text3,marginBottom:6,letterSpacing:.5}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
           <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,letterSpacing:-1}}>Good {new Date().getHours()<12?"morning":"afternoon"}, {user?.name?.split(" ")[0]}.</h1>
-          <p style={{color:T.text3,marginTop:6,fontSize:15}}>{isGuest?"You're in guest mode — sign up to unlock everything.":`Level ${user?.level} · ${level.title} · ${user?.streak} day streak 🔥`}</p>
+          <p style={{color:T.text3,marginTop:6,fontSize:15}}>{isGuest?"You're in guest mode — sign up to save your progress.":`Level ${user?.level} · ${level.title} · ${user?.streak} day streak 🔥`}</p>
         </div>
         <div style={{maxWidth:320,padding:"16px 20px",background:T.card,border:`1px solid ${T.border}`,borderRadius:12,borderLeft:`3px solid ${T.amber}`}}>
           <div style={{fontFamily:T.serif,fontSize:14,fontStyle:"italic",color:T.text2,lineHeight:1.6,marginBottom:8}}>"{quote.q}"</div>
@@ -497,10 +617,10 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginBottom:40}}>
         {[
-          {label:"Reading Level",  value:level.title,              sub:`Level ${user?.level} of 10`,color:T.amber,   icon:"⚡"},
-          {label:"Current Streak", value:`${user?.streak}`,        sub:"consecutive days",          color:"#ff7043", icon:"🔥"},
-          {label:"Avg WPM",        value:avgWpm||"--",             sub:"words per minute",          color:T.teal,    icon:"📖"},
-          {label:"Sessions",       value:user?.totalSessions||"0", sub:"total completed",           color:"#a78bfa", icon:"✓"},
+          {label:"Reading Level",  value:level.title,              sub:`Level ${user?.level} of 10`,  color:T.amber,   icon:"⚡"},
+          {label:"Current Streak", value:`${user?.streak||0}`,     sub:"consecutive days",            color:"#ff7043", icon:"🔥"},
+          {label:"Avg WPM",        value:avgWpm||"--",             sub:"across all sessions",         color:T.teal,    icon:"📖"},
+          {label:"Sessions",       value:user?.totalSessions||"0", sub:"total completed",             color:"#a78bfa", icon:"✓"},
         ].map((s,i)=>(
           <div key={s.label} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"22px",animation:`fadeUp 0.4s ${0.05*i}s ease both`}}>
             <div style={{fontSize:24,marginBottom:8}}>{s.icon}</div>
@@ -555,14 +675,40 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
         </div>
       </div>
 
-      {sessions.length>0 && (
+      {sessions.length > 0 && (
         <div style={{marginTop:40,animation:"fadeUp 0.4s 0.3s ease both"}}>
-          <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:16}}>Recent Sessions</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+            <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text}}>Session History</div>
+            <div style={{fontSize:13,color:T.text3}}>{sessions.length} session{sessions.length!==1?"s":""} total · avg {avgComp}% comprehension</div>
+          </div>
           <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden"}}>
             <table style={{width:"100%",borderCollapse:"collapse"}}>
-              <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>{["Passage","WPM","Comprehension","Words Read","Date"].map(h=><th key={h} style={{padding:"12px 20px",textAlign:"left",fontSize:11,color:T.text3,fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>{h}</th>)}</tr></thead>
-              <tbody>{sessions.slice(0,5).map((s,i)=><tr key={i} style={{borderBottom:`1px solid ${T.border}`}}><td style={{padding:"14px 20px",fontSize:14,color:T.text}}>{s.passage.title}</td><td style={{padding:"14px 20px",fontSize:14,color:T.amber,fontWeight:700,fontFamily:T.mono}}>{s.wpm}</td><td style={{padding:"14px 20px",fontSize:14,color:T.teal,fontFamily:T.mono}}>{s.comp||"—"}%</td><td style={{padding:"14px 20px",fontSize:14,color:T.text2,fontFamily:T.mono}}>{s.wordsRead}</td><td style={{padding:"14px 20px",fontSize:12,color:T.text3}}>{new Date(s.ts).toLocaleDateString()}</td></tr>)}</tbody>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${T.border}`}}>
+                  {["Passage","WPM","Comprehension","Words Read","Date"].map(h=>(
+                    <th key={h} style={{padding:"12px 20px",textAlign:"left",fontSize:11,color:T.text3,fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.slice(0,10).map((s,i)=>(
+                  <tr key={s.id||i} style={{borderBottom:i<Math.min(sessions.length,10)-1?`1px solid ${T.border}`:"none"}}>
+                    <td style={{padding:"14px 20px",fontSize:14,color:T.text}}>{s.passage?.title||"—"}</td>
+                    <td style={{padding:"14px 20px",fontSize:14,color:T.amber,fontWeight:700,fontFamily:T.mono}}>{s.wpm}</td>
+                    <td style={{padding:"14px 20px",fontSize:14,fontFamily:T.mono}}>
+                      <span style={{color: s.comp>=70?T.teal:s.comp>=50?"#ffa500":T.red}}>{s.comp||"—"}{s.comp?"%":""}</span>
+                    </td>
+                    <td style={{padding:"14px 20px",fontSize:14,color:T.text2,fontFamily:T.mono}}>{s.wordsRead}</td>
+                    <td style={{padding:"14px 20px",fontSize:12,color:T.text3}}>{new Date(s.ts).toLocaleDateString()}</td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
+            {sessions.length > 10 && (
+              <div style={{padding:"12px 20px",borderTop:`1px solid ${T.border}`,fontSize:13,color:T.text3,textAlign:"center"}}>
+                Showing 10 of {sessions.length} sessions
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -807,7 +953,7 @@ function ResultsView({ results, onDone, onFlashcards }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GENERATE VIEW  — Pollinations AI (free, no key)
+// GENERATE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function GenerateView({ user, isGuest, onStart, notify }) {
   const [genre,   setGenre]   = useState("fiction");
@@ -867,7 +1013,7 @@ function GenerateView({ user, isGuest, onStart, notify }) {
         <Btn size="lg" onClick={generate} disabled={loading||isGuest} style={{width:"100%",justifyContent:"center"}}>
           {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> {status||"Generating…"}</>:<>✨ Generate Passage</>}
         </Btn>
-        {loading&&<div style={{marginTop:14,fontSize:13,color:T.text3,textAlign:"center"}}>This usually takes 5–15 seconds. Pollinations AI is free so it may occasionally be slow.</div>}
+        {loading&&<div style={{marginTop:14,fontSize:13,color:T.text3,textAlign:"center"}}>This usually takes 5–15 seconds.</div>}
       </div>
       <div style={{marginTop:20,padding:"14px 18px",background:`${T.teal}11`,border:`1px solid ${T.teal}33`,borderRadius:10,fontSize:13,color:T.teal}}>
         ✓ Powered by <strong>Pollinations AI</strong> — completely free, no API key required.
