@@ -357,6 +357,90 @@ async function deleteUpload(uploadId) {
   if (error) throw error;
 }
 
+// ★ AI Passages helpers — shared community library
+async function fetchAIPassages() {
+  const { data, error } = await supabase
+    .from("ai_passages")
+    .select("*")
+    .eq("is_public", true)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(rowToAIPassage);
+}
+
+function rowToAIPassage(row) {
+  return {
+    id:           row.id,
+    title:        row.title,
+    genre:        row.genre,
+    level:        row.level,
+    wordCount:    row.word_count,
+    text:         row.text,
+    quizJson:     typeof row.quiz_json === "string" ? JSON.parse(row.quiz_json) : row.quiz_json,
+    createdBy:    row.created_by,
+    creatorName:  row.creator_name || "Anonymous",
+    isPublic:     row.is_public,
+    createdAt:    new Date(row.created_at).getTime(),
+    tags:         ["ai-generated"],
+    isAIPassage:  true,
+  };
+}
+
+async function saveAIPassage(userId, creatorName, { title, genre, level, wordCount, text, quizJson }) {
+  const { data, error } = await supabase.from("ai_passages").insert({
+    created_by:   userId,
+    creator_name: creatorName,
+    title,
+    genre,
+    level,
+    word_count:   wordCount,
+    text,
+    quiz_json:    JSON.stringify(quizJson),
+    is_public:    false,   // private by default; user publishes manually
+  }).select().single();
+  if (error) throw error;
+  return rowToAIPassage(data);
+}
+
+async function fetchMyAIPassages(userId) {
+  const { data, error } = await supabase
+    .from("ai_passages")
+    .select("*")
+    .eq("created_by", userId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(rowToAIPassage);
+}
+
+async function publishAIPassage(passageId) {
+  const { error } = await supabase
+    .from("ai_passages")
+    .update({ is_public: true })
+    .eq("id", passageId);
+  if (error) throw error;
+}
+
+async function unpublishAIPassage(passageId) {
+  const { error } = await supabase
+    .from("ai_passages")
+    .update({ is_public: false })
+    .eq("id", passageId);
+  if (error) throw error;
+}
+
+async function deleteAIPassage(passageId) {
+  const { error } = await supabase.from("ai_passages").delete().eq("id", passageId);
+  if (error) throw error;
+}
+
+async function updateAIPassageQuiz(passageId, quizJson) {
+  const { error } = await supabase
+    .from("ai_passages")
+    .update({ quiz_json: JSON.stringify(quizJson) })
+    .eq("id", passageId);
+  if (error) throw error;
+}
+
 // ── Icons & primitives ────────────────────────────────────────────────────────
 const SVG = ({ d, size=18, stroke=T.text2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={stroke} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
@@ -421,6 +505,8 @@ export default function App() {
   const [isGuest,       setIsGuest]       = useState(false);
   const [sessions,      setSessions]      = useState([]);
   const [uploads,       setUploads]       = useState([]);   // ★ saved uploads
+  const [aiPassages,    setAIPassages]    = useState([]);   // ★ public community AI passages
+  const [myAIPassages,  setMyAIPassages]  = useState([]);   // ★ current user's own AI passages (all)
   const [flashcards,    setFlashcards]    = useState([]);
   const [activePassage, setActivePassage] = useState(null);
   const [quizSession,   setQuizSession]   = useState(null);
@@ -450,12 +536,16 @@ export default function App() {
             streak: profile.streak,
             totalSessions: profile.total_sessions,
           });
-          const [past, savedUploads] = await Promise.all([
+          const [past, savedUploads, aiP, myAIP] = await Promise.all([
             fetchSessions(session.user.id),
             fetchUploads(session.user.id),
+            fetchAIPassages(),
+            fetchMyAIPassages(session.user.id),
           ]);
           setSessions(past);
           setUploads(savedUploads);
+          setAIPassages(aiP);
+          setMyAIPassages(myAIP);
           setView("dashboard");
         } catch(e) { setView("auth"); }
       }
@@ -471,12 +561,16 @@ export default function App() {
         id: data.user.id, name: profile.name, email: data.user.email,
         level: profile.level, streak: profile.streak, totalSessions: profile.total_sessions,
       });
-      const [past, savedUploads] = await Promise.all([
+      const [past, savedUploads, aiP, myAIP] = await Promise.all([
         fetchSessions(data.user.id),
         fetchUploads(data.user.id),
+        fetchAIPassages(),
+        fetchMyAIPassages(data.user.id),
       ]);
       setSessions(past);
       setUploads(savedUploads);
+      setAIPassages(aiP);
+      setMyAIPassages(myAIP);
       setView("dashboard");
       notify("Welcome back! Ready to read faster?");
     } catch(e) { notify(e.message || "Login failed — check your email and password", "err"); }
@@ -499,31 +593,31 @@ export default function App() {
 
   const logout = async () => {
     await signOut();
-    setUser(null); setIsGuest(false); setSessions([]); setUploads([]); setView("auth");
+    setUser(null); setIsGuest(false); setSessions([]); setUploads([]); setAIPassages([]); setMyAIPassages([]); setView("auth");
   };
 
   // ── Reading / quiz flow ───────────────────────────────────────────────────
   const startReading = passage => { setActivePassage(passage); setView("reading"); };
 
   const finishReading = async (sessionData) => {
-    // For uploads / AI / generated passages, generate quiz questions on-the-fly
-    const needsAIQuiz = !QUIZZES[sessionData.passage.id];
-    if (needsAIQuiz) {
+    const p = sessionData.passage;
+    // If the passage already carries quizJson (saved AI passage), use it directly
+    if (p.quizJson) {
+      setPendingQuiz(null); // QuizView will read p.quizJson
+    } else if (!QUIZZES[p.id]) {
+      // Upload or unsaved AI passage — generate quiz now
       notify("Generating quiz from your text… ✨");
       try {
-        const qs = await generateQuizForPassage(
-          sessionData.passage.text,
-          sessionData.passage.title
-        );
+        const qs = await generateQuizForPassage(p.text, p.title);
         setPendingQuiz(qs);
       } catch(e) {
         console.error("Quiz generation failed:", e);
-        setPendingQuiz(null); // will fall back to p1 static quiz
+        setPendingQuiz(null);
       }
     } else {
-      setPendingQuiz(null);
+      setPendingQuiz(null); // curated passage — static quiz
     }
-    setQuizSession({ passage: sessionData.passage, sessionData });
+    setQuizSession({ passage: p, sessionData });
     setView("quiz");
   };
 
@@ -569,6 +663,55 @@ export default function App() {
     } catch(e) {
       notify("Couldn't save — check your connection.", "err");
       return null;
+    }
+  };
+
+  // ★ Save a newly generated AI passage + quiz to DB (private by default)
+  const handleSaveAIPassage = async (passageData) => {
+    if (isGuest || !user?.id) return null;
+    try {
+      const saved = await saveAIPassage(user.id, user.name, passageData);
+      // Goes into myAIPassages (private); not in public aiPassages yet
+      setMyAIPassages(prev => [saved, ...prev]);
+      return saved;
+    } catch(e) {
+      console.error("Failed to save AI passage:", e);
+      return null;
+    }
+  };
+
+  // ★ Publish / unpublish an AI passage
+  const handlePublishAIPassage = async (passageId, publish) => {
+    try {
+      if (publish) await publishAIPassage(passageId);
+      else await unpublishAIPassage(passageId);
+      setMyAIPassages(prev => prev.map(p => p.id === passageId ? { ...p, isPublic: publish } : p));
+      // Refresh public list
+      const pub = await fetchAIPassages();
+      setAIPassages(pub);
+    } catch(e) { console.error("Publish failed:", e); }
+  };
+
+  // ★ Delete an AI passage (owner only)
+  const handleDeleteAIPassage = async (passageId) => {
+    try {
+      await deleteAIPassage(passageId);
+      setMyAIPassages(prev => prev.filter(p => p.id !== passageId));
+      setAIPassages(prev => prev.filter(p => p.id !== passageId));
+    } catch(e) { console.error("Delete failed:", e); }
+  };
+
+  // ★ Regenerate quiz for an AI passage (original generator only)
+  const handleRegenerateQuiz = async (passageId, passageText, passageTitle) => {
+    try {
+      const qs = await generateQuizForPassage(passageText, passageTitle);
+      await updateAIPassageQuiz(passageId, qs);
+      setAIPassages(prev => prev.map(p =>
+        p.id === passageId ? { ...p, quizJson: qs } : p
+      ));
+      return qs;
+    } catch(e) {
+      throw e;
     }
   };
 
@@ -637,8 +780,8 @@ export default function App() {
 
       <main style={{flex:1,marginLeft:["reading","quiz","results"].includes(view)?0:220,minHeight:"100vh",overflow:"auto"}}>
         {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView}/>}
-        {view==="library"    && <LibraryView    onStart={startReading}/>}
-        {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify}/>}
+        {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify}/>}
+        {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz}/>}
         {view==="flashcards" && <FlashcardsView flashcards={flashcards} setFlashcards={setFlashcards}/>}
         {view==="upload"     && <UploadView     onStart={startReading} notify={notify} uploads={uploads} isGuest={isGuest} userId={user?.id} onSave={handleSaveUpload} onDelete={handleDeleteUpload}/>}
         {view==="reading"    && activePassage && <ReadingView  passage={activePassage} onFinish={finishReading} onExit={()=>setView("dashboard")}/>}
@@ -903,50 +1046,192 @@ function PassageRow({ passage, onStart }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // LIBRARY
 // ─────────────────────────────────────────────────────────────────────────────
-function LibraryView({ onStart }) {
+function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onDeleteAI, onRegenerateQuiz, notify }) {
+  const [tab,    setTab]    = useState("curated");  // "curated" | "community" | "mine"
   const [genre,  setGenre]  = useState("all");
   const [search, setSearch] = useState("");
-  const genres   = ["all",...new Set(PASSAGES.map(p=>p.genre))];
-  const filtered = PASSAGES.filter(p=>(genre==="all"||p.genre===genre)&&(p.title.toLowerCase().includes(search.toLowerCase())||p.tags.some(t=>t.includes(search.toLowerCase()))));
+  const [regenId, setRegenId] = useState(null); // passage id being regenerated
+
+  // Curated filter
+  const genres   = ["all", ...new Set(PASSAGES.map(p => p.genre))];
+  const filtered = PASSAGES.filter(p =>
+    (genre === "all" || p.genre === genre) &&
+    (p.title.toLowerCase().includes(search.toLowerCase()) ||
+     p.tags.some(t => t.includes(search.toLowerCase())))
+  );
+
+  // AI passage filter (community = public only; mine = user's own)
+  const aiFiltered = (tab === "community" ? aiPassages : (myAIPassages || []))
+    .filter(p =>
+      !search ||
+      p.title.toLowerCase().includes(search.toLowerCase()) ||
+      (p.creatorName || "").toLowerCase().includes(search.toLowerCase())
+    );
+
+  const handleRegen = async (p) => {
+    if (!onRegenerateQuiz) return;
+    setRegenId(p.id);
+    try {
+      await onRegenerateQuiz(p.id, p.text, p.title);
+      notify("Quiz regenerated ✓");
+    } catch(e) {
+      notify("Regeneration failed — try again.", "err");
+    }
+    setRegenId(null);
+  };
+
+  const TABS = [
+    { id:"curated",   label:"📚 Curated",           count: PASSAGES.length },
+    { id:"community", label:"🌐 Community AI",       count: aiPassages.length },
+    { id:"mine",      label:"✨ My Generated",       count: (myAIPassages||[]).length },
+  ];
 
   return (
     <div style={{padding:"40px 48px"}}>
-      <div style={{marginBottom:32,animation:"fadeUp 0.4s ease both"}}>
+      <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
         <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Library</h1>
-        <p style={{color:T.text3,fontSize:15}}>12 curated passages organized by level, genre, and topic.</p>
+        <p style={{color:T.text3,fontSize:15}}>Curated passages, community AI passages, and your own generations.</p>
       </div>
-      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:28,flexWrap:"wrap",animation:"fadeUp 0.4s 0.05s ease both"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search passages..." style={{padding:"10px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.card,color:T.text,fontSize:14,outline:"none",width:260}}/>
-        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {genres.map(g=>(
-            <button key={g} onClick={()=>setGenre(g)} style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${genre===g?T.amber:T.border}`,background:genre===g?T.amberGlow:"transparent",color:genre===g?T.amber:T.text3,cursor:"pointer",fontSize:13,fontWeight:genre===g?600:400,transition:"all 0.15s"}}>
-              {g==="all"?"All":g}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:20}}>
-        {filtered.map((p,i)=>(
-          <div key={p.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"24px",display:"flex",flexDirection:"column",gap:16,animation:`fadeUp 0.4s ${0.04*i}s ease both`,transition:"border-color 0.15s",cursor:"pointer"}}
-            onClick={()=>onStart(p)} onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"44"} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-            <div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                <div style={{fontFamily:T.serif,fontSize:18,fontWeight:700,color:T.text,lineHeight:1.3}}>{p.title}</div>
-                <Tag label={`Lv ${p.level}`} color="amber"/>
-              </div>
-              <div style={{fontSize:13,color:T.text3,lineHeight:1.6}}>{p.text.slice(0,120)}...</div>
-            </div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              <Tag label={p.genre}/><Tag label={`${p.wordCount} words`}/>
-              {p.tags.slice(0,2).map(t=><Tag key={t} label={t}/>)}
-            </div>
-            <Btn size="sm" style={{alignSelf:"flex-start"}}>Start Reading <SVG d={ICONS.arrow} size={13} stroke={T.bg}/></Btn>
-          </div>
+
+      {/* Top tab bar */}
+      <div style={{display:"flex",gap:6,marginBottom:24,animation:"fadeUp 0.4s 0.04s ease both"}}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={()=>{setTab(t.id);setGenre("all");setSearch("");}}
+            style={{padding:"9px 18px",borderRadius:8,border:`1px solid ${tab===t.id?T.amber:T.border}`,background:tab===t.id?T.amberGlow:"transparent",color:tab===t.id?T.amber:T.text2,cursor:"pointer",fontSize:13,fontWeight:tab===t.id?600:400,transition:"all 0.15s",display:"flex",alignItems:"center",gap:7}}>
+            {t.label}
+            <span style={{fontSize:10,background:tab===t.id?T.amber+"33":T.border2,color:tab===t.id?T.amber:T.text3,padding:"1px 6px",borderRadius:10}}>{t.count}</span>
+          </button>
         ))}
       </div>
+
+      {/* Search + genre filters (curated only) */}
+      <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:28,flexWrap:"wrap",animation:"fadeUp 0.4s 0.08s ease both"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          placeholder={tab==="curated"?"Search passages…":"Search by title or author…"}
+          style={{padding:"10px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.card,color:T.text,fontSize:14,outline:"none",width:260}}/>
+        {tab === "curated" && (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {genres.map(g => (
+              <button key={g} onClick={()=>setGenre(g)}
+                style={{padding:"9px 16px",borderRadius:8,border:`1px solid ${genre===g?T.amber:T.border}`,background:genre===g?T.amberGlow:"transparent",color:genre===g?T.amber:T.text3,cursor:"pointer",fontSize:13,fontWeight:genre===g?600:400,transition:"all 0.15s"}}>
+                {g==="all"?"All":g}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── CURATED TAB ── */}
+      {tab === "curated" && (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:20}}>
+          {filtered.map((p,i) => (
+            <div key={p.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"24px",display:"flex",flexDirection:"column",gap:16,animation:`fadeUp 0.4s ${0.04*i}s ease both`,transition:"border-color 0.15s",cursor:"pointer"}}
+              onClick={()=>onStart(p)} onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"44"} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+              <div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{fontFamily:T.serif,fontSize:18,fontWeight:700,color:T.text,lineHeight:1.3}}>{p.title}</div>
+                  <Tag label={`Lv ${p.level}`} color="amber"/>
+                </div>
+                <div style={{fontSize:13,color:T.text3,lineHeight:1.6}}>{p.text.slice(0,120)}...</div>
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <Tag label={p.genre}/><Tag label={`${p.wordCount} words`}/>
+                {p.tags.slice(0,2).map(t=><Tag key={t} label={t}/>)}
+              </div>
+              <Btn size="sm" style={{alignSelf:"flex-start"}}>Start Reading <SVG d={ICONS.arrow} size={13} stroke={T.bg}/></Btn>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── COMMUNITY / MINE TABS ── */}
+      {(tab === "community" || tab === "mine") && (
+        <div>
+          {aiFiltered.length === 0 ? (
+            <div style={{padding:"60px 40px",textAlign:"center",background:T.card,border:`1px solid ${T.border}`,borderRadius:16}}>
+              <div style={{fontSize:40,marginBottom:12}}>{tab==="mine"?"✨":"🌐"}</div>
+              <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:8}}>
+                {tab==="mine" ? "No generated passages yet" : "No community passages yet"}
+              </div>
+              <div style={{fontSize:14,color:T.text3,marginBottom:20}}>
+                {tab==="mine" ? "Generate a passage and it will appear here." : "Be the first to publish a passage to the community!"}
+              </div>
+            </div>
+          ) : (
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(360px,1fr))",gap:20}}>
+              {aiFiltered.map((p,i) => {
+                const isOwner = userId && p.createdBy === userId;
+                return (
+                  <div key={p.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"22px",display:"flex",flexDirection:"column",gap:14,animation:`fadeUp 0.4s ${0.04*i}s ease both`,transition:"border-color 0.15s"}}
+                    onMouseEnter={e=>e.currentTarget.style.borderColor=T.teal+"44"} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+
+                    {/* Header row */}
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                      <div style={{fontFamily:T.serif,fontSize:17,fontWeight:700,color:T.text,lineHeight:1.3,flex:1}}>{p.title}</div>
+                      <div style={{display:"flex",gap:6,flexShrink:0}}>
+                        <Tag label={`Lv ${p.level}`} color="amber"/>
+                        {tab==="mine" && (
+                          <span style={{fontSize:10,padding:"3px 8px",borderRadius:20,fontWeight:600,background:p.isPublic?`${T.teal}22`:`${T.amber}22`,color:p.isPublic?T.teal:T.amber}}>
+                            {p.isPublic?"Public":"Private"}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Excerpt */}
+                    <div style={{fontSize:13,color:T.text3,lineHeight:1.6}}>{p.text.slice(0,110)}…</div>
+
+                    {/* Meta row */}
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                      <Tag label={p.genre}/>
+                      <Tag label={`${p.wordCount} words`}/>
+                      <Tag label={new Date(p.createdAt).toLocaleDateString()}/>
+                      {tab==="community" && <Tag label={`by ${p.creatorName}`} color="teal"/>}
+                    </div>
+
+                    {/* Action row */}
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:2}}>
+                      <Btn size="sm" onClick={()=>onStart({...p, quizJson: p.quizJson})}>
+                        Read <SVG d={ICONS.arrow} size={13} stroke={T.bg}/>
+                      </Btn>
+                      {isOwner && (
+                        <>
+                          {/* Publish / Unpublish toggle */}
+                          <Btn size="sm" variant="secondary"
+                            onClick={()=>onPublish(p.id, !p.isPublic)}
+                            style={{fontSize:12}}>
+                            {p.isPublic ? "📥 Unpublish" : "🌐 Publish"}
+                          </Btn>
+                          {/* Regenerate quiz */}
+                          <Btn size="sm" variant="ghost"
+                            disabled={regenId===p.id}
+                            onClick={()=>handleRegen(p)}
+                            style={{fontSize:12}}>
+                            {regenId===p.id
+                              ? <><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> Regen…</>
+                              : "🔄 Regen Quiz"
+                            }
+                          </Btn>
+                          {/* Delete */}
+                          <Btn size="sm" variant="danger"
+                            onClick={()=>onDeleteAI(p.id)}
+                            style={{padding:"6px 10px"}}>
+                            <SVG d={ICONS.trash} size={13} stroke={T.red}/>
+                          </Btn>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // READING VIEW
@@ -1035,19 +1320,26 @@ function ReadingView({ passage, onFinish, onExit }) {
 // QUIZ VIEW — ★ accepts dynamicQuestions for uploads/AI passages
 // ─────────────────────────────────────────────────────────────────────────────
 function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) {
-  // Use AI-generated questions if available, else fall back to static QUIZZES
-  const questions = dynamicQuestions || QUIZZES[passage.id] || QUIZZES.p1;
+  // Priority: 1) passage already has quizJson (saved AI passage) — zero API call
+  //           2) dynamicQuestions generated after reading (upload / unsaved AI)
+  //           3) static QUIZZES lookup for curated passages
+  //           4) fallback loading state (generates on-the-fly)
+  const questions = passage.quizJson || dynamicQuestions || QUIZZES[passage.id] || null;
   const [answers, setAnswers] = useState({});
   const [current, setCurrent] = useState(0);
-  const q = questions[current];
 
-  // If questions are still loading (dynamicQuestions is null but passage needs AI quiz)
-  const isLoading = !dynamicQuestions && !QUIZZES[passage.id];
+  const isLoading = !questions;
+  const q = questions ? questions[current] : null;
 
-  const submit = ()=>{
-    const missed=[]; let correct=0;
-    questions.forEach(q=>{if(answers[q.id]===q.correct)correct++;else missed.push(q);});
-    onSubmit({score:Math.round((correct/questions.length)*100),correct,total:questions.length,missed,passage,sessionData});
+  const isAIQuiz = !!(passage.quizJson || dynamicQuestions);
+
+  const submit = () => {
+    const missed = []; let correct = 0;
+    questions.forEach(q => {
+      if (answers[q.id] === q.correct) correct++;
+      else missed.push(q);
+    });
+    onSubmit({ score: Math.round((correct/questions.length)*100), correct, total: questions.length, missed, passage, sessionData });
   };
 
   if (isLoading) {
@@ -1066,46 +1358,79 @@ function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) 
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:40}}>
           <div>
             <div style={{fontFamily:T.serif,fontSize:28,fontWeight:900,color:T.text}}>Comprehension Quiz</div>
-            <div style={{fontSize:14,color:T.text3,marginTop:4}}>
+            <div style={{fontSize:14,color:T.text3,marginTop:4,display:"flex",alignItems:"center",gap:8}}>
               {passage.title}
-              {dynamicQuestions && <span style={{marginLeft:8,fontSize:11,color:T.teal,background:`${T.teal}18`,padding:"2px 8px",borderRadius:20}}>AI-generated</span>}
+              {isAIQuiz && (
+                <span style={{fontSize:11,color:T.teal,background:`${T.teal}18`,padding:"2px 8px",borderRadius:20}}>
+                  AI-generated quiz
+                </span>
+              )}
             </div>
           </div>
-          <button onClick={onExit} style={{background:"none",border:"none",cursor:"pointer",color:T.text3,fontSize:13}} onMouseEnter={e=>e.currentTarget.style.color=T.red} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>Skip quiz</button>
+          <button onClick={onExit} style={{background:"none",border:"none",cursor:"pointer",color:T.text3,fontSize:13}}
+            onMouseEnter={e=>e.currentTarget.style.color=T.red} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>
+            Skip quiz
+          </button>
         </div>
+
+        {/* Progress dots */}
         <div style={{display:"flex",gap:8,marginBottom:36}}>
-          {questions.map((_,i)=><div key={i} onClick={()=>setCurrent(i)} style={{flex:1,height:5,borderRadius:3,cursor:"pointer",background:answers[questions[i].id]!==undefined?T.amber:i===current?T.teal:T.card2,transition:"background 0.2s"}}/>)}
+          {questions.map((_,i) => (
+            <div key={i} onClick={()=>setCurrent(i)} style={{flex:1,height:5,borderRadius:3,cursor:"pointer",background:answers[questions[i].id]!==undefined?T.amber:i===current?T.teal:T.card2,transition:"background 0.2s"}}/>
+          ))}
         </div>
+
+        {/* Question */}
         <div style={{animation:"fadeIn 0.25s ease both"}} key={q.id}>
-          <div style={{fontSize:11,color:T.amber,letterSpacing:1,fontWeight:700,textTransform:"uppercase",marginBottom:12}}>Question {current+1} of {questions.length} · {q.type==="tf"?"True / False":"Multiple Choice"}</div>
+          <div style={{fontSize:11,color:T.amber,letterSpacing:1,fontWeight:700,textTransform:"uppercase",marginBottom:12}}>
+            Question {current+1} of {questions.length} · {q.type==="tf"?"True / False":"Multiple Choice"}
+          </div>
           <div style={{fontFamily:T.serif,fontSize:22,lineHeight:1.6,color:T.text,marginBottom:32}}>{q.q}</div>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {q.choices.map((c,i)=>{
-              const sel=answers[q.id]===i;
+            {q.choices.map((c,i) => {
+              const sel = answers[q.id] === i;
               return (
-                <button key={i} onClick={()=>setAnswers(prev=>({...prev,[q.id]:i}))} style={{padding:"16px 20px",borderRadius:10,border:`2px solid ${sel?T.amber:T.border}`,background:sel?T.amberGlow:T.card,color:T.text,textAlign:"left",cursor:"pointer",fontSize:15,transition:"all 0.15s",display:"flex",alignItems:"center",gap:14}}
+                <button key={i} onClick={()=>setAnswers(prev=>({...prev,[q.id]:i}))}
+                  style={{padding:"16px 20px",borderRadius:10,border:`2px solid ${sel?T.amber:T.border}`,background:sel?T.amberGlow:T.card,color:T.text,textAlign:"left",cursor:"pointer",fontSize:15,transition:"all 0.15s",display:"flex",alignItems:"center",gap:14}}
                   onMouseEnter={e=>{if(!sel){e.currentTarget.style.borderColor=T.amber+"44";e.currentTarget.style.background=T.card2;}}}
                   onMouseLeave={e=>{if(!sel){e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.card;}}}>
-                  <span style={{width:28,height:28,borderRadius:"50%",border:`2px solid ${sel?T.amber:T.border2}`,background:sel?T.amber:"transparent",color:sel?T.bg:T.text3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{sel?"✓":String.fromCharCode(65+i)}</span>
+                  <span style={{width:28,height:28,borderRadius:"50%",border:`2px solid ${sel?T.amber:T.border2}`,background:sel?T.amber:"transparent",color:sel?T.bg:T.text3,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>
+                    {sel?"✓":String.fromCharCode(65+i)}
+                  </span>
                   {c}
                 </button>
               );
             })}
           </div>
         </div>
+
         <div style={{display:"flex",gap:12,marginTop:40}}>
-          {current>0&&<Btn variant="secondary" onClick={()=>setCurrent(c=>c-1)}>← Previous</Btn>}
-          {current<questions.length-1?<Btn onClick={()=>setCurrent(c=>c+1)}>Next →</Btn>:<Btn onClick={submit} disabled={Object.keys(answers).length<questions.length} variant="teal">Submit Quiz ✓</Btn>}
+          {current > 0 && <Btn variant="secondary" onClick={()=>setCurrent(c=>c-1)}>← Previous</Btn>}
+          {current < questions.length-1
+            ? <Btn onClick={()=>setCurrent(c=>c+1)}>Next →</Btn>
+            : <Btn onClick={submit} disabled={Object.keys(answers).length<questions.length} variant="teal">Submit Quiz ✓</Btn>
+          }
         </div>
       </div>
+
+      {/* Side panel */}
       <div style={{width:380,flexShrink:0,borderLeft:`1px solid ${T.border}`,padding:"48px 32px",overflowY:"auto",background:T.surface}}>
         <div style={{fontSize:13,color:T.text3,marginBottom:16,fontWeight:600,letterSpacing:.5,textTransform:"uppercase"}}>Passage Reference</div>
         <div style={{fontFamily:T.serif,fontSize:15,lineHeight:1.9,color:T.text2}}>{passage.text.slice(0,600)}<span style={{color:T.text3}}>…</span></div>
-        {sessionData&&<div style={{marginTop:24,padding:"14px 16px",background:T.card,borderRadius:10,border:`1px solid ${T.border}`}}><div style={{fontSize:11,color:T.text3,marginBottom:8,letterSpacing:.5,textTransform:"uppercase"}}>Your Session</div><div style={{display:"flex",gap:20}}><div><div style={{fontFamily:T.mono,fontSize:20,color:T.amber,fontWeight:700}}>{sessionData.wpm}</div><div style={{fontSize:11,color:T.text3}}>WPM</div></div><div><div style={{fontFamily:T.mono,fontSize:20,color:T.teal,fontWeight:700}}>{sessionData.wordsRead}</div><div style={{fontSize:11,color:T.text3}}>words</div></div></div></div>}
+        {sessionData && (
+          <div style={{marginTop:24,padding:"14px 16px",background:T.card,borderRadius:10,border:`1px solid ${T.border}`}}>
+            <div style={{fontSize:11,color:T.text3,marginBottom:8,letterSpacing:.5,textTransform:"uppercase"}}>Your Session</div>
+            <div style={{display:"flex",gap:20}}>
+              <div><div style={{fontFamily:T.mono,fontSize:20,color:T.amber,fontWeight:700}}>{sessionData.wpm}</div><div style={{fontSize:11,color:T.text3}}>WPM</div></div>
+              <div><div style={{fontFamily:T.mono,fontSize:20,color:T.teal,fontWeight:700}}>{sessionData.wordsRead}</div><div style={{fontSize:11,color:T.text3}}>words</div></div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RESULTS VIEW
@@ -1142,7 +1467,7 @@ function ResultsView({ results, onDone, onFlashcards }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GENERATE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
-function GenerateView({ user, isGuest, onStart, notify }) {
+function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz }) {
   const [genre,   setGenre]   = useState("fiction");
   const [level,   setLevel]   = useState(user?.level||3);
   const [length,  setLength]  = useState(300);
@@ -1159,15 +1484,37 @@ function GenerateView({ user, isGuest, onStart, notify }) {
         academic:  `Write a ${length}-word expository passage for a level ${level}/10 reader. Use clear academic language with 2-3 domain terms. Topic: ${topic||"the science of memory and learning"}. Write only the passage, no title.`,
         vocabulary:`Write a ${length}-word passage for a level ${level}/10 reader with rich sophisticated vocabulary used naturally in context. Topic: ${topic||"the nature of time and perception"}. Write only the passage, no title.`,
       };
-      setStatus("Generating your passage...");
+      setStatus("Generating passage...");
       const text = await generateWithAI(prompts[genre]);
+      const genreLabel = `AI ${genre.charAt(0).toUpperCase()+genre.slice(1)}`;
+      const title = topic ? topic.charAt(0).toUpperCase()+topic.slice(1) : genreLabel;
+      const wordCount = text.split(/\s+/).length;
+
+      setStatus("Generating quiz...");
+      let quizJson = null;
+      try { quizJson = await generateQuizForPassage(text, title); } catch(e) { /* quiz optional */ }
+
+      // Save to DB (public immediately)
+      setStatus("Saving to community library...");
+      let savedPassage = null;
+      if (onSaveAIPassage) {
+        savedPassage = await onSaveAIPassage({ title, genre: genreLabel, level, wordCount, text, quizJson });
+      }
+
       const p = {
-        id:`gen-${Date.now()}`,
-        title: topic ? topic.charAt(0).toUpperCase()+topic.slice(1) : `AI: ${genre.charAt(0).toUpperCase()+genre.slice(1)}`,
-        genre:`AI ${genre.charAt(0).toUpperCase()+genre.slice(1)}`,
-        level, wordCount:text.split(/\s+/).length, text, tags:["ai-generated",genre],
+        id:        savedPassage ? savedPassage.id : `gen-${Date.now()}`,
+        title,
+        genre:     genreLabel,
+        level,
+        wordCount,
+        text,
+        tags:      ["ai-generated", genre],
+        quizJson,
+        isAIPassage: !!savedPassage,
+        createdBy:   user?.id,
+        creatorName: user?.name,
       };
-      notify("Passage ready! Starting reading session…");
+      notify("Passage saved to library! Starting session…");
       onStart(p);
     } catch(e) { notify("Generation failed — Pollinations AI may be busy. Try again in a moment.","err"); }
     setLoading(false); setStatus("");
@@ -1200,10 +1547,23 @@ function GenerateView({ user, isGuest, onStart, notify }) {
         <Btn size="lg" onClick={generate} disabled={loading||isGuest} style={{width:"100%",justifyContent:"center"}}>
           {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> {status||"Generating…"}</>:<>✨ Generate Passage</>}
         </Btn>
-        {loading&&<div style={{marginTop:14,fontSize:13,color:T.text3,textAlign:"center"}}>This usually takes 5–15 seconds.</div>}
+        {loading && (
+          <div style={{marginTop:14,fontSize:13,color:T.text3,textAlign:"center"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:6}}>
+              {["Generating passage...","Generating quiz...","Saving to community library..."].map((step,i)=>(
+                <span key={step} style={{display:"flex",alignItems:"center",gap:4,opacity:status===step?1:0.35,transition:"opacity 0.3s"}}>
+                  <span style={{width:6,height:6,borderRadius:"50%",background:status===step?T.amber:T.text3,display:"inline-block"}}/>
+                  <span style={{fontSize:11,color:status===step?T.amber:T.text3,fontWeight:status===step?600:400}}>{step.replace("...","")}</span>
+                  {i<2&&<span style={{color:T.text3,fontSize:11,marginLeft:2}}>→</span>}
+                </span>
+              ))}
+            </div>
+            <div style={{fontSize:11,color:T.text3}}>Passage + quiz generated and saved for everyone to use.</div>
+          </div>
+        )}
       </div>
       <div style={{marginTop:20,padding:"14px 18px",background:`${T.teal}11`,border:`1px solid ${T.teal}33`,borderRadius:10,fontSize:13,color:T.teal}}>
-        ✓ Powered by <strong>Pollinations AI</strong> — completely free, no API key required.
+        ✓ Powered by <strong>Pollinations AI</strong> — free, no API key. Passages are saved to the community library for all users.
       </div>
     </div>
   );

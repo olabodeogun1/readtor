@@ -213,9 +213,59 @@ async function generateWithAI(prompt) {
   return text.trim();
 }
 
-// ── Supabase session helpers ──────────────────────────────────────────────────
+// ── AI Quiz generation for user-uploaded / AI-generated passages ──────────────
+// Returns an array of 5 quiz question objects matching our QUIZZES format
+async function generateQuizForPassage(passageText, passageTitle) {
+  const prompt = `You are a reading comprehension quiz creator.
 
-// Fetch all sessions for a user, newest first
+Read the following passage carefully, then create exactly 5 quiz questions about it.
+
+PASSAGE:
+"""
+${passageText.slice(0, 2000)}
+"""
+
+Return ONLY a valid JSON array with exactly 5 objects. No extra text, no markdown, no code fences — just the raw JSON array.
+
+Each object must have:
+- "id": "q1", "q2", "q3", "q4", "q5"
+- "type": "mc" (multiple choice) or "tf" (true/false)
+- "q": the question string
+- "choices": array of exactly 4 strings (for "mc") or ["True","False"] (for "tf")
+- "correct": zero-based index of the correct choice
+- "exp": one sentence explanation of the correct answer, referencing the passage
+
+Mix mc and tf types. Base ALL questions strictly on what the passage says — no outside knowledge.`;
+
+  const encoded = encodeURIComponent(
+    "You are a quiz creator. Return only raw JSON, no markdown.\n\n" + prompt
+  );
+  const res = await fetch(`https://text.pollinations.ai/${encoded}`);
+  if (!res.ok) throw new Error("Quiz generation failed");
+  const raw = await res.text();
+
+  // Strip any accidental markdown fences
+  const cleaned = raw.replace(/```json|```/g, "").trim();
+  // Find the JSON array
+  const start = cleaned.indexOf("[");
+  const end   = cleaned.lastIndexOf("]");
+  if (start === -1 || end === -1) throw new Error("No JSON array found in response");
+  const parsed = JSON.parse(cleaned.slice(start, end + 1));
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid quiz array");
+
+  // Validate + normalise each question
+  return parsed.slice(0, 5).map((q, i) => ({
+    id:      q.id      || `q${i+1}`,
+    type:    q.type    || "mc",
+    q:       q.q       || q.question || "Question",
+    choices: Array.isArray(q.choices) ? q.choices : ["True","False"],
+    correct: typeof q.correct === "number" ? q.correct : 0,
+    exp:     q.exp     || q.explanation || "See passage.",
+  }));
+}
+
+// ── Supabase helpers ──────────────────────────────────────────────────────────
+
 async function fetchSessions(userId) {
   const { data, error } = await supabase
     .from("sessions")
@@ -223,7 +273,6 @@ async function fetchSessions(userId) {
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
   if (error) throw error;
-  // Normalise DB rows → app shape
   return (data || []).map(row => ({
     id:          row.id,
     passage:     { title: row.passage_title, id: "db", wordCount: row.words_read },
@@ -235,12 +284,11 @@ async function fetchSessions(userId) {
   }));
 }
 
-// Save one session after a quiz is submitted
 async function saveSession(userId, { passage, wpm, comp, wordsRead, timeSeconds }) {
   const { error } = await supabase.from("sessions").insert({
     user_id:       userId,
     passage_title: passage.title,
-    wpm:           wpm,
+    wpm,
     words_read:    wordsRead,
     comprehension: comp || 0,
     time_seconds:  timeSeconds,
@@ -248,9 +296,7 @@ async function saveSession(userId, { passage, wpm, comp, wordsRead, timeSeconds 
   if (error) throw error;
 }
 
-// Update profile totals after a session
 async function incrementProfile(userId) {
-  // Fetch current totals first
   const { data: profile } = await supabase
     .from("profiles")
     .select("total_sessions, streak")
@@ -261,6 +307,54 @@ async function incrementProfile(userId) {
     total_sessions: (profile.total_sessions || 0) + 1,
     streak:         (profile.streak || 0) + 1,
   }).eq("id", userId);
+}
+
+// ★ Saved uploads helpers
+async function fetchUploads(userId) {
+  const { data, error } = await supabase
+    .from("uploads")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data || []).map(row => ({
+    id:        row.id,
+    title:     row.title,
+    text:      row.text,
+    wordCount: row.word_count,
+    createdAt: new Date(row.created_at).getTime(),
+    // shape it as a passage object so startReading works directly
+    genre:     "Uploaded",
+    level:     5,
+    tags:      ["uploaded"],
+    isUpload:  true,
+  }));
+}
+
+async function saveUpload(userId, { title, text, wordCount }) {
+  const { data, error } = await supabase.from("uploads").insert({
+    user_id:    userId,
+    title,
+    text,
+    word_count: wordCount,
+  }).select().single();
+  if (error) throw error;
+  return {
+    id:        data.id,
+    title:     data.title,
+    text:      data.text,
+    wordCount: data.word_count,
+    createdAt: new Date(data.created_at).getTime(),
+    genre:     "Uploaded",
+    level:     5,
+    tags:      ["uploaded"],
+    isUpload:  true,
+  };
+}
+
+async function deleteUpload(uploadId) {
+  const { error } = await supabase.from("uploads").delete().eq("id", uploadId);
+  if (error) throw error;
 }
 
 // ── Icons & primitives ────────────────────────────────────────────────────────
@@ -279,6 +373,7 @@ const ICONS = {
   logout:   ["M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4","M16 17l5-5-5-5","M21 12H9"],
   x:        "M18 6L6 18M6 6l12 12",
   arrow:    "M5 12h14M12 5l7 7-7 7",
+  trash:    ["M3 6h18","M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6","M10 11v6","M14 11v6","M9 6V4h6v2"],
 };
 
 const Btn = ({ children, onClick, variant="primary", disabled, style={}, size="md" }) => {
@@ -306,6 +401,17 @@ const Tag = ({ label, color }) => (
   </span>
 );
 
+// ── Google "G" logo SVG (official brand colours) ──────────────────────────────
+const GoogleIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 48 48" style={{flexShrink:0}}>
+    <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+    <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+    <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+    <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+    <path fill="none" d="M0 0h48v48H0z"/>
+  </svg>
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // APP ROOT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -314,15 +420,18 @@ export default function App() {
   const [user,          setUser]          = useState(null);
   const [isGuest,       setIsGuest]       = useState(false);
   const [sessions,      setSessions]      = useState([]);
+  const [uploads,       setUploads]       = useState([]);   // ★ saved uploads
   const [flashcards,    setFlashcards]    = useState([]);
   const [activePassage, setActivePassage] = useState(null);
   const [quizSession,   setQuizSession]   = useState(null);
   const [lastResults,   setLastResults]   = useState(null);
   const [toast,         setToast]         = useState(null);
+  // ★ dynamic quiz questions (null = use static QUIZZES lookup)
+  const [pendingQuiz,   setPendingQuiz]   = useState(null);
 
   const notify = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3200); };
 
-  // ── Load user + sessions on mount (handles page refresh / Google OAuth) ──
+  // ── Load user + sessions + uploads on mount ───────────────────────────────
   useEffect(() => {
     getSession().then(async session => {
       if (session) {
@@ -341,31 +450,33 @@ export default function App() {
             streak: profile.streak,
             totalSessions: profile.total_sessions,
           });
-          // ★ Load all past sessions from DB
-          const past = await fetchSessions(session.user.id);
+          const [past, savedUploads] = await Promise.all([
+            fetchSessions(session.user.id),
+            fetchUploads(session.user.id),
+          ]);
           setSessions(past);
+          setUploads(savedUploads);
           setView("dashboard");
         } catch(e) { setView("auth"); }
       }
     });
   }, []);
 
-  // ── Auth helpers ──────────────────────────────────────────────────────────
+  // ── Auth ──────────────────────────────────────────────────────────────────
   const login = async (email, password) => {
     try {
-      const data = await signIn(email, password);
+      const data    = await signIn(email, password);
       const profile = await getProfile(data.user.id);
       setUser({
-        id: data.user.id,
-        name: profile.name,
-        email: data.user.email,
-        level: profile.level,
-        streak: profile.streak,
-        totalSessions: profile.total_sessions,
+        id: data.user.id, name: profile.name, email: data.user.email,
+        level: profile.level, streak: profile.streak, totalSessions: profile.total_sessions,
       });
-      // ★ Load all past sessions
-      const past = await fetchSessions(data.user.id);
+      const [past, savedUploads] = await Promise.all([
+        fetchSessions(data.user.id),
+        fetchUploads(data.user.id),
+      ]);
       setSessions(past);
+      setUploads(savedUploads);
       setView("dashboard");
       notify("Welcome back! Ready to read faster?");
     } catch(e) { notify(e.message || "Login failed — check your email and password", "err"); }
@@ -388,20 +499,38 @@ export default function App() {
 
   const logout = async () => {
     await signOut();
-    setUser(null); setIsGuest(false); setSessions([]); setView("auth");
+    setUser(null); setIsGuest(false); setSessions([]); setUploads([]); setView("auth");
   };
 
   // ── Reading / quiz flow ───────────────────────────────────────────────────
-  const startReading  = passage => { setActivePassage(passage); setView("reading"); };
-  const finishReading = sessionData => {
+  const startReading = passage => { setActivePassage(passage); setView("reading"); };
+
+  const finishReading = async (sessionData) => {
+    // For uploads / AI / generated passages, generate quiz questions on-the-fly
+    const needsAIQuiz = !QUIZZES[sessionData.passage.id];
+    if (needsAIQuiz) {
+      notify("Generating quiz from your text… ✨");
+      try {
+        const qs = await generateQuizForPassage(
+          sessionData.passage.text,
+          sessionData.passage.title
+        );
+        setPendingQuiz(qs);
+      } catch(e) {
+        console.error("Quiz generation failed:", e);
+        setPendingQuiz(null); // will fall back to p1 static quiz
+      }
+    } else {
+      setPendingQuiz(null);
+    }
     setQuizSession({ passage: sessionData.passage, sessionData });
     setView("quiz");
   };
 
   const submitQuiz = async (results) => {
     setLastResults(results);
+    setPendingQuiz(null);
 
-    // Add missed questions as flashcards
     if (results.missed.length > 0) {
       const cards = results.missed.map(q => ({
         id:`${Date.now()}-${Math.random()}`, question:q.q, answer:q.exp, due:Date.now(), interval:1,
@@ -410,33 +539,48 @@ export default function App() {
     }
 
     if (!isGuest && user?.id) {
-      // ★ Save session to Supabase
       try {
-        await saveSession(user.id, {
-          ...results.sessionData,
-          comp: results.score,
-        });
+        await saveSession(user.id, { ...results.sessionData, comp: results.score });
         await incrementProfile(user.id);
-        // ★ Refresh sessions list and user profile totals from DB
-        const past = await fetchSessions(user.id);
+        const [past, profile] = await Promise.all([
+          fetchSessions(user.id),
+          getProfile(user.id),
+        ]);
         setSessions(past);
-        const profile = await getProfile(user.id);
-        setUser(prev => ({
-          ...prev,
-          totalSessions: profile.total_sessions,
-          streak: profile.streak,
-        }));
+        setUser(prev => ({ ...prev, totalSessions: profile.total_sessions, streak: profile.streak }));
       } catch(e) {
         console.error("Failed to save session:", e);
         notify("Session couldn't be saved — check your connection.", "err");
       }
     } else {
-      // Guest: just prepend locally
       setSessions(prev => [results.sessionData, ...prev]);
-      setUser(prev => prev ? { ...prev, totalSessions: (prev.totalSessions||0)+1, streak: (prev.streak||0)+1 } : prev);
+      setUser(prev => prev ? { ...prev, totalSessions:(prev.totalSessions||0)+1, streak:(prev.streak||0)+1 } : prev);
     }
-
     setView("results");
+  };
+
+  // ★ Save a new upload to Supabase and add to local state
+  const handleSaveUpload = async (uploadData) => {
+    if (isGuest || !user?.id) return null;
+    try {
+      const saved = await saveUpload(user.id, uploadData);
+      setUploads(prev => [saved, ...prev]);
+      return saved;
+    } catch(e) {
+      notify("Couldn't save — check your connection.", "err");
+      return null;
+    }
+  };
+
+  // ★ Delete a saved upload
+  const handleDeleteUpload = async (uploadId) => {
+    try {
+      await deleteUpload(uploadId);
+      setUploads(prev => prev.filter(u => u.id !== uploadId));
+      notify("Upload deleted.");
+    } catch(e) {
+      notify("Couldn't delete — try again.", "err");
+    }
   };
 
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
@@ -490,16 +634,18 @@ export default function App() {
           </div>
         </aside>
       )}
+
       <main style={{flex:1,marginLeft:["reading","quiz","results"].includes(view)?0:220,minHeight:"100vh",overflow:"auto"}}>
-        {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards}/>}
+        {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView}/>}
         {view==="library"    && <LibraryView    onStart={startReading}/>}
         {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify}/>}
         {view==="flashcards" && <FlashcardsView flashcards={flashcards} setFlashcards={setFlashcards}/>}
-        {view==="upload"     && <UploadView     onStart={startReading} notify={notify}/>}
+        {view==="upload"     && <UploadView     onStart={startReading} notify={notify} uploads={uploads} isGuest={isGuest} userId={user?.id} onSave={handleSaveUpload} onDelete={handleDeleteUpload}/>}
         {view==="reading"    && activePassage && <ReadingView  passage={activePassage} onFinish={finishReading} onExit={()=>setView("dashboard")}/>}
-        {view==="quiz"       && quizSession   && <QuizView     passage={quizSession.passage} sessionData={quizSession.sessionData} onSubmit={submitQuiz} onExit={()=>setView("dashboard")}/>}
+        {view==="quiz"       && quizSession   && <QuizView     passage={quizSession.passage} sessionData={quizSession.sessionData} onSubmit={submitQuiz} onExit={()=>setView("dashboard")} dynamicQuestions={pendingQuiz}/>}
         {view==="results"    && lastResults   && <ResultsView  results={lastResults} onDone={()=>setView("dashboard")} onFlashcards={()=>setView("flashcards")}/>}
       </main>
+
       {toast && (
         <div style={{position:"fixed",bottom:28,right:28,background:toast.type==="ok"?T.card2:`${T.red}22`,border:`1px solid ${toast.type==="ok"?T.amber+"55":T.red+"55"}`,color:toast.type==="ok"?T.text:T.red,padding:"12px 20px",borderRadius:10,fontSize:14,zIndex:999,animation:"fadeUp 0.3s ease both",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",maxWidth:340}}>
           {toast.msg}
@@ -541,6 +687,7 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
 
   return (
     <div style={{display:"flex",minHeight:"100vh"}}>
+      {/* Left hero */}
       <div style={{flex:1,background:`linear-gradient(160deg,#0d0f1c 0%,#07080f 60%)`,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",borderRight:`1px solid ${T.border}`,position:"relative",overflow:"hidden"}}>
         <div style={{position:"absolute",top:"-10%",right:"-5%",width:500,height:500,borderRadius:"50%",background:`radial-gradient(circle,${T.amber}08 0%,transparent 70%)`,pointerEvents:"none"}}/>
         <div style={{fontFamily:T.serif,fontSize:64,fontWeight:900,color:T.amber,letterSpacing:-2,lineHeight:1,marginBottom:16,animation:"fadeUp 0.6s ease both"}}>Read<span style={{color:T.text}}>tor</span></div>
@@ -555,9 +702,13 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
           <div style={{fontSize:12,color:T.text3,letterSpacing:.5}}>— George R.R. Martin</div>
         </div>
       </div>
+
+      {/* Right form */}
       <div style={{width:440,flexShrink:0,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 48px",background:T.surface}}>
         <div style={{fontFamily:T.serif,fontSize:28,fontWeight:700,color:T.text,marginBottom:6}}>{mode==="login"?"Welcome back":"Begin your journey"}</div>
         <div style={{fontSize:14,color:T.text3,marginBottom:28}}>{mode==="login"?"Sign in to continue your practice":"Create an account — it's free"}</div>
+
+        {/* Tab toggle */}
         <div style={{display:"flex",background:T.card,borderRadius:8,padding:4,marginBottom:24,border:`1px solid ${T.border}`}}>
           {["login","signup"].map(m=>(
             <button key={m} onClick={()=>switchMode(m)} style={{flex:1,padding:"9px",borderRadius:6,border:"none",background:mode===m?T.amber:"transparent",color:mode===m?T.bg:T.text2,fontWeight:mode===m?700:400,cursor:"pointer",fontSize:14,transition:"all 0.15s"}}>
@@ -565,11 +716,13 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
             </button>
           ))}
         </div>
+
         {formMsg.text && (
           <div style={{padding:"14px 16px",borderRadius:8,marginBottom:16,fontSize:14,lineHeight:1.6,animation:"fadeUp 0.2s ease both",background:formMsg.type==="ok"?"#0d2e1f":`${T.red}18`,border:`1px solid ${formMsg.type==="ok"?"#1a5c3a":T.red+"55"}`,color:formMsg.type==="ok"?"#4ade80":T.red}}>
             {formMsg.type==="ok"?"✅ ":"⚠️ "}{formMsg.text}
           </div>
         )}
+
         <div style={{display:"flex",flexDirection:"column",gap:14}}>
           {mode==="signup" && <input style={inp} placeholder="Full name" value={name} onChange={e=>setName(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>}
           <input style={inp} placeholder="Email address" type="email" value={email} onChange={e=>setEmail(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
@@ -578,12 +731,19 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
             {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> Please wait…</>:mode==="login"?"Sign In →":"Create Account →"}
           </Btn>
         </div>
+
         <div style={{display:"flex",alignItems:"center",gap:12,margin:"20px 0"}}>
           <div style={{flex:1,height:1,background:T.border}}/><span style={{fontSize:12,color:T.text3}}>or</span><div style={{flex:1,height:1,background:T.border}}/>
         </div>
-        <Btn onClick={onGoogle} style={{width:"100%",justifyContent:"center",marginBottom:10,background:"#fff",color:"#333",border:"1px solid #ddd"}}>
-          <span style={{fontSize:16}}>G</span> Continue with Google
-        </Btn>
+
+        {/* ★ Google button with real icon */}
+        <button onClick={onGoogle} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"11px 20px",background:"#fff",color:"#3c4043",border:"1px solid #dadce0",borderRadius:8,cursor:"pointer",fontSize:14,fontWeight:500,marginBottom:10,transition:"all 0.15s"}}
+          onMouseEnter={e=>{e.currentTarget.style.background="#f8f9fa";e.currentTarget.style.boxShadow="0 1px 3px rgba(0,0,0,0.12)";}}
+          onMouseLeave={e=>{e.currentTarget.style.background="#fff";e.currentTarget.style.boxShadow="none";}}>
+          <GoogleIcon/>
+          Continue with Google
+        </button>
+
         <Btn variant="ghost" onClick={onGuest} style={{width:"100%",justifyContent:"center"}}>Continue as Guest</Btn>
         <p style={{fontSize:11,color:T.text3,marginTop:24,lineHeight:1.7,textAlign:"center"}}>By continuing you agree to our Terms of Service and Privacy Policy.</p>
       </div>
@@ -592,14 +752,22 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DASHBOARD
+// DASHBOARD — ★ Quick Start buttons now navigate correctly
 // ─────────────────────────────────────────────────────────────────────────────
-function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
+function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView }) {
   const level    = LEVELS[(user?.level||1)-1];
   const quote    = QUOTES[new Date().getDate()%QUOTES.length];
   const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.wpm||0),0)/sessions.length) : 0;
   const avgComp  = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.comp||0),0)/sessions.length) : 0;
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
+
+  // ★ Quick Start items now have a view target
+  const quickStart = [
+    { label:"Browse Library",   icon:"📚", desc:"12 curated passages by level",  view:"library"    },
+    { label:"Generate with AI", icon:"✨", desc:"Free AI content at your level",  view:"generate"   },
+    { label:"Upload a Text",    icon:"📤", desc:"Practice with your own content", view:"upload"     },
+    { label:`Flashcards${dueCards>0?` (${dueCards} due)`:""}`, icon:"🃏", desc:"Spaced repetition review", view:"flashcards" },
+  ];
 
   return (
     <div style={{padding:"40px 48px",maxWidth:1200}}>
@@ -658,17 +826,16 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
         <div>
           <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:16}}>Quick Start</div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            {[
-              {label:"Browse Library",   icon:"📚", desc:"12 curated passages by level"},
-              {label:"Generate with AI", icon:"✨", desc:"Free AI content at your level"},
-              {label:"Upload a Text",    icon:"📤", desc:"Practice with your own content"},
-              {label:`Flashcards${dueCards>0?` (${dueCards} due)`:""}`, icon:"🃏", desc:"Spaced repetition review"},
-            ].map(a=>(
-              <button key={a.label} style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:T.card,border:`1px solid ${T.border}`,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s"}}
+            {quickStart.map(a=>(
+              <button key={a.label} onClick={()=>setView(a.view)}
+                style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:T.card,border:`1px solid ${T.border}`,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s",width:"100%"}}
                 onMouseEnter={e=>{e.currentTarget.style.borderColor=T.amber+"55";e.currentTarget.style.background=T.amberGlow;}}
                 onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.card;}}>
                 <span style={{fontSize:22}}>{a.icon}</span>
-                <div><div style={{fontSize:14,fontWeight:600,color:T.text}}>{a.label}</div><div style={{fontSize:12,color:T.text3}}>{a.desc}</div></div>
+                <div>
+                  <div style={{fontSize:14,fontWeight:600,color:T.text}}>{a.label}</div>
+                  <div style={{fontSize:12,color:T.text3}}>{a.desc}</div>
+                </div>
               </button>
             ))}
           </div>
@@ -696,7 +863,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards }) {
                     <td style={{padding:"14px 20px",fontSize:14,color:T.text}}>{s.passage?.title||"—"}</td>
                     <td style={{padding:"14px 20px",fontSize:14,color:T.amber,fontWeight:700,fontFamily:T.mono}}>{s.wpm}</td>
                     <td style={{padding:"14px 20px",fontSize:14,fontFamily:T.mono}}>
-                      <span style={{color: s.comp>=70?T.teal:s.comp>=50?"#ffa500":T.red}}>{s.comp||"—"}{s.comp?"%":""}</span>
+                      <span style={{color:s.comp>=70?T.teal:s.comp>=50?"#ffa500":T.red}}>{s.comp||"—"}{s.comp?"%":""}</span>
                     </td>
                     <td style={{padding:"14px 20px",fontSize:14,color:T.text2,fontFamily:T.mono}}>{s.wordsRead}</td>
                     <td style={{padding:"14px 20px",fontSize:12,color:T.text3}}>{new Date(s.ts).toLocaleDateString()}</td>
@@ -865,13 +1032,17 @@ function ReadingView({ passage, onFinish, onExit }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// QUIZ VIEW
+// QUIZ VIEW — ★ accepts dynamicQuestions for uploads/AI passages
 // ─────────────────────────────────────────────────────────────────────────────
-function QuizView({ passage, sessionData, onSubmit, onExit }) {
-  const questions = QUIZZES[passage.id]||QUIZZES.p1;
+function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) {
+  // Use AI-generated questions if available, else fall back to static QUIZZES
+  const questions = dynamicQuestions || QUIZZES[passage.id] || QUIZZES.p1;
   const [answers, setAnswers] = useState({});
   const [current, setCurrent] = useState(0);
   const q = questions[current];
+
+  // If questions are still loading (dynamicQuestions is null but passage needs AI quiz)
+  const isLoading = !dynamicQuestions && !QUIZZES[passage.id];
 
   const submit = ()=>{
     const missed=[]; let correct=0;
@@ -879,11 +1050,27 @@ function QuizView({ passage, sessionData, onSubmit, onExit }) {
     onSubmit({score:Math.round((correct/questions.length)*100),correct,total:questions.length,missed,passage,sessionData});
   };
 
+  if (isLoading) {
+    return (
+      <div style={{display:"flex",height:"100vh",background:T.bg,alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+        <span style={{fontSize:32,animation:"spin 1.5s linear infinite",display:"inline-block"}}>✦</span>
+        <div style={{fontSize:16,color:T.text2}}>Generating quiz from your text…</div>
+        <div style={{fontSize:13,color:T.text3}}>This takes about 10 seconds</div>
+      </div>
+    );
+  }
+
   return (
     <div style={{display:"flex",height:"100vh",background:T.bg}}>
       <div style={{flex:1,display:"flex",flexDirection:"column",padding:"48px 56px",overflowY:"auto"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:40}}>
-          <div><div style={{fontFamily:T.serif,fontSize:28,fontWeight:900,color:T.text}}>Comprehension Quiz</div><div style={{fontSize:14,color:T.text3,marginTop:4}}>{passage.title}</div></div>
+          <div>
+            <div style={{fontFamily:T.serif,fontSize:28,fontWeight:900,color:T.text}}>Comprehension Quiz</div>
+            <div style={{fontSize:14,color:T.text3,marginTop:4}}>
+              {passage.title}
+              {dynamicQuestions && <span style={{marginLeft:8,fontSize:11,color:T.teal,background:`${T.teal}18`,padding:"2px 8px",borderRadius:20}}>AI-generated</span>}
+            </div>
+          </div>
           <button onClick={onExit} style={{background:"none",border:"none",cursor:"pointer",color:T.text3,fontSize:13}} onMouseEnter={e=>e.currentTarget.style.color=T.red} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>Skip quiz</button>
         </div>
         <div style={{display:"flex",gap:8,marginBottom:36}}>
@@ -1080,40 +1267,121 @@ function FlashcardsView({ flashcards, setFlashcards }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UPLOAD VIEW
+// UPLOAD VIEW — ★ completely rebuilt with saved texts library
 // ─────────────────────────────────────────────────────────────────────────────
-function UploadView({ onStart, notify }) {
-  const [title, setTitle] = useState("");
-  const [text,  setText]  = useState("");
+function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelete }) {
+  const [title,   setTitle]   = useState("");
+  const [text,    setText]    = useState("");
+  const [saving,  setSaving]  = useState(false);
+  const [tab,     setTab]     = useState("new"); // "new" | "saved"
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
 
-  const start = () => {
-    if(wordCount<50){notify("Please paste at least 50 words","err");return;}
-    onStart({id:`upload-${Date.now()}`,title:title||"My Upload",genre:"Custom",level:5,wordCount,text:text.trim(),tags:["uploaded"]});
+  const start = async () => {
+    if (wordCount < 50) { notify("Please paste at least 50 words","err"); return; }
+    const passage = {
+      id:`upload-${Date.now()}`,
+      title: title || "My Upload",
+      genre:"Uploaded",
+      level:5,
+      wordCount,
+      text: text.trim(),
+      tags:["uploaded"],
+    };
+    // Auto-save if logged in
+    if (!isGuest && userId) {
+      setSaving(true);
+      const saved = await onSave({ title: passage.title, text: passage.text, wordCount });
+      setSaving(false);
+      if (saved) {
+        passage.id = saved.id; // use DB id so it stays consistent
+        notify("Saved to your library ✓");
+      }
+    }
+    onStart(passage);
   };
 
+  const inp = {width:"100%",padding:"12px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.surface,color:T.text,fontSize:15,outline:"none",transition:"border-color 0.2s"};
+
   return (
-    <div style={{padding:"40px 48px",maxWidth:860}}>
-      <div style={{marginBottom:36,animation:"fadeUp 0.4s ease both"}}>
+    <div style={{padding:"40px 48px",maxWidth:960}}>
+      <div style={{marginBottom:32,animation:"fadeUp 0.4s ease both"}}>
         <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Upload Text</h1>
-        <p style={{color:T.text3,fontSize:15}}>Paste any text to practice with your own content — articles, essays, chapters.</p>
+        <p style={{color:T.text3,fontSize:15}}>Paste any text to practice with — articles, essays, chapters. Saved automatically to your profile.</p>
       </div>
-      <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:16,padding:"32px",animation:"fadeUp 0.4s 0.05s ease both"}}>
-        <div style={{marginBottom:20}}>
-          <label style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",display:"block",marginBottom:8}}>Title</label>
-          <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. Chapter 3 — The Origin of Species" style={{width:"100%",padding:"12px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.surface,color:T.text,fontSize:15,outline:"none"}} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
-        </div>
-        <div style={{marginBottom:20}}>
-          <label style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",display:"block",marginBottom:8}}>
-            Paste Text <span style={{color:T.text3,textTransform:"none",letterSpacing:0,fontSize:11}}>· {wordCount} words · {wordCount>=50?"✓ ready":`need ${50-wordCount} more`}</span>
-          </label>
-          <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Paste your text here (minimum 50 words)…" style={{width:"100%",height:320,padding:"16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.surface,color:T.text,fontSize:16,fontFamily:T.serif,lineHeight:1.8,resize:"vertical",outline:"none"}} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
-        </div>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div style={{fontSize:13,color:T.text3}}>Supports plain text paste · PDF and DOCX import in full version</div>
-          <Btn size="lg" onClick={start} disabled={wordCount<50}>Start Session →</Btn>
-        </div>
+
+      {/* Tab bar */}
+      <div style={{display:"flex",background:T.card,borderRadius:10,padding:4,marginBottom:28,border:`1px solid ${T.border}`,width:"fit-content",animation:"fadeUp 0.4s 0.05s ease both"}}>
+        {[{id:"new",label:"📝 New Text"},{id:"saved",label:`📂 My Saved Texts${uploads.length>0?` (${uploads.length})`:""}`}].map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"9px 20px",borderRadius:8,border:"none",background:tab===t.id?T.amber:"transparent",color:tab===t.id?T.bg:T.text2,fontWeight:tab===t.id?700:400,cursor:"pointer",fontSize:14,transition:"all 0.15s"}}>
+            {t.label}
+          </button>
+        ))}
       </div>
+
+      {tab === "new" && (
+        <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:16,padding:"32px",animation:"fadeUp 0.4s ease both"}}>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",display:"block",marginBottom:8}}>Title</label>
+            <input value={title} onChange={e=>setTitle(e.target.value)} placeholder="e.g. Chapter 3 — The Origin of Species" style={inp} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
+          </div>
+          <div style={{marginBottom:20}}>
+            <label style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",display:"block",marginBottom:8}}>
+              Paste Text <span style={{color:T.text3,textTransform:"none",letterSpacing:0,fontSize:11}}>· {wordCount} words · {wordCount>=50?"✓ ready":`need ${50-wordCount} more`}</span>
+            </label>
+            <textarea value={text} onChange={e=>setText(e.target.value)} placeholder="Paste your text here (minimum 50 words)…" style={{width:"100%",height:280,padding:"16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.surface,color:T.text,fontSize:16,fontFamily:T.serif,lineHeight:1.8,resize:"vertical",outline:"none"}} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
+          </div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div style={{fontSize:13,color:T.text3}}>
+              {isGuest ? "⚠️ Sign in to save texts to your profile." : "✓ Text will be saved to your profile automatically."}
+            </div>
+            <Btn size="lg" onClick={start} disabled={wordCount<50||saving}>
+              {saving?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> Saving…</>:"Start Reading →"}
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {tab === "saved" && (
+        <div style={{animation:"fadeUp 0.4s ease both"}}>
+          {isGuest ? (
+            <div style={{padding:"60px 40px",textAlign:"center",background:T.card,border:`1px solid ${T.border}`,borderRadius:16}}>
+              <div style={{fontSize:40,marginBottom:12}}>🔒</div>
+              <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:8}}>Sign in to view saved texts</div>
+              <div style={{fontSize:14,color:T.text3}}>Create a free account to save your texts and access them anytime.</div>
+            </div>
+          ) : uploads.length === 0 ? (
+            <div style={{padding:"60px 40px",textAlign:"center",background:T.card,border:`1px solid ${T.border}`,borderRadius:16}}>
+              <div style={{fontSize:40,marginBottom:12}}>📂</div>
+              <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:8}}>No saved texts yet</div>
+              <div style={{fontSize:14,color:T.text3,marginBottom:20}}>Upload a text and it will be saved here automatically.</div>
+              <Btn onClick={()=>setTab("new")}>Upload your first text →</Btn>
+            </div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              {uploads.map((u,i)=>(
+                <div key={u.id} style={{display:"flex",alignItems:"center",gap:16,padding:"18px 22px",background:T.card,border:`1px solid ${T.border}`,borderRadius:12,transition:"border-color 0.15s",animation:`fadeUp 0.3s ${i*0.04}s ease both`}}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"44"} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:T.serif,fontSize:16,fontWeight:700,color:T.text,marginBottom:4}}>{u.title}</div>
+                    <div style={{fontSize:13,color:T.text3,lineHeight:1.5}}>{u.text.slice(0,100)}…</div>
+                    <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                      <Tag label={`${u.wordCount} words`} color="amber"/>
+                      <Tag label="Uploaded"/>
+                      <Tag label={new Date(u.createdAt).toLocaleDateString()}/>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,flexShrink:0}}>
+                    <Btn size="sm" onClick={()=>onStart(u)}>Read <SVG d={ICONS.arrow} size={13} stroke={T.bg}/></Btn>
+                    <Btn size="sm" variant="danger" onClick={()=>onDelete(u.id)} style={{padding:"6px 10px"}}>
+                      <SVG d={ICONS.trash} size={13} stroke={T.red}/>
+                    </Btn>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
