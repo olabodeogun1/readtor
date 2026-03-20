@@ -287,20 +287,19 @@ async function generateWithAI(prompt) {
   const body = "Write a reading passage. Output ONLY the passage text — no title, no preamble, "
     + "no word count, no commentary. Start immediately with the first sentence.\n\n" + prompt;
   const encoded = encodeURIComponent(body);
-  const models = ["openai", "mistral", "llama"];
-
-  for (const model of models) {
-    try {
-      const res = await fetch(
-        "https://text.pollinations.ai/" + encoded + "?model=" + model + "&seed=" + Date.now()
-      );
-      if (!res.ok) continue;
-      const raw  = await res.text();
-      const text = extractPassageFromPollinations(raw);
-      if (text && text.length >= 80) return text;
-    } catch(e) { /* try next model */ }
+  // Anonymous requests to text.pollinations.ai work without model param.
+  // seed must be a u32 (max 2147483647) — Date.now() is too large.
+  const seed = Date.now() % 2147483647;
+  try {
+    const res = await fetch("https://text.pollinations.ai/" + encoded + "?seed=" + seed);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const raw  = await res.text();
+    const text = extractPassageFromPollinations(raw);
+    if (text && text.length >= 80) return text;
+    throw new Error("Response too short or unparseable");
+  } catch(e) {
+    throw new Error("Generation failed — Pollinations AI may be busy. Please try again.");
   }
-  throw new Error("Generation failed — Pollinations AI may be busy. Please try again.");
 }
 
 // ── AI Quiz generation ────────────────────────────────────────────────────────
@@ -315,54 +314,44 @@ async function generateQuizForPassage(passageText, passageTitle) {
     + "Output ONLY the JSON array starting with [";
 
   const encoded = encodeURIComponent(body);
-  const models = ["openai", "mistral", "llama"];
+  const seed    = Date.now() % 2147483647;
 
-  for (const model of models) {
+  const res = await fetch("https://text.pollinations.ai/" + encoded + "?seed=" + seed);
+  if (!res.ok) throw new Error("Quiz generation failed — HTTP " + res.status);
+  const raw = await res.text();
+
+  // Extract JSON — response may be wrapped in a reasoning blob
+  let jsonStr = raw.trim();
+  if (jsonStr.startsWith("{")) {
     try {
-      const res = await fetch(
-        "https://text.pollinations.ai/" + encoded + "?model=" + model + "&seed=" + Date.now()
-      );
-      if (!res.ok) continue;
-      const raw = await res.text();
-
-      // Extract JSON from response — may be wrapped in reasoning blob
-      let jsonStr = raw.trim();
-
-      // If it's a reasoning blob, look for JSON array inside reasoning_content
-      if (jsonStr.startsWith("{")) {
-        try {
-          const parsed = JSON.parse(jsonStr);
-          if (parsed.reasoning_content) {
-            jsonStr = parsed.reasoning_content
-              .replace(/\\n/g, "\n").replace(/\\"/g, '"');
-          }
-        } catch(e) {
-          const rcMatch = jsonStr.match(/"reasoning_content"\s*:\s*"([\s\S]+?)(?:",\s*"tool_calls"|$)/);
-          if (rcMatch) jsonStr = rcMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
-        }
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.reasoning_content) {
+        jsonStr = parsed.reasoning_content
+          .replace(/\\n/g, "\n").replace(/\\"/g, '"');
       }
-
-      // Strip markdown fences
-      jsonStr = jsonStr.replace(/```json|```/g, "").trim();
-      // Find the JSON array
-      const arrStart = jsonStr.indexOf("[");
-      const arrEnd   = jsonStr.lastIndexOf("]");
-      if (arrStart === -1 || arrEnd === -1) continue;
-
-      const parsed = JSON.parse(jsonStr.slice(arrStart, arrEnd + 1));
-      if (!Array.isArray(parsed) || parsed.length === 0) continue;
-
-      return parsed.slice(0, 5).map((q, i) => ({
-        id:      q.id      || "q" + (i + 1),
-        type:    q.type    || "mc",
-        q:       q.q       || q.question || "Question",
-        choices: Array.isArray(q.choices) ? q.choices : ["True", "False"],
-        correct: typeof q.correct === "number" ? q.correct : 0,
-        exp:     q.exp     || q.explanation || "See passage.",
-      }));
-    } catch(e) { /* try next model */ }
+    } catch(e) {
+      const rcMatch = jsonStr.match(/"reasoning_content"\s*:\s*"([\s\S]+?)(?:",\s*"tool_calls"|$)/);
+      if (rcMatch) jsonStr = rcMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+    }
   }
-  throw new Error("Quiz generation failed — please try again.");
+
+  // Strip markdown fences and find the JSON array
+  jsonStr = jsonStr.replace(/```json|```/g, "").trim();
+  const arrStart = jsonStr.indexOf("[");
+  const arrEnd   = jsonStr.lastIndexOf("]");
+  if (arrStart === -1 || arrEnd === -1) throw new Error("No JSON array in quiz response");
+
+  const parsed = JSON.parse(jsonStr.slice(arrStart, arrEnd + 1));
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid quiz array");
+
+  return parsed.slice(0, 5).map((q, i) => ({
+    id:      q.id      || "q" + (i + 1),
+    type:    q.type    || "mc",
+    q:       q.q       || q.question || "Question",
+    choices: Array.isArray(q.choices) ? q.choices : ["True", "False"],
+    correct: typeof q.correct === "number" ? q.correct : 0,
+    exp:     q.exp     || q.explanation || "See passage.",
+  }));
 }
 
 // ── Supabase helpers ──────────────────────────────────────────────────────────
