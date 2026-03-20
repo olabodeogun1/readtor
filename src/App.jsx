@@ -203,88 +203,71 @@ const QUIZZES = {
 };
 
 // ── Pollinations AI ───────────────────────────────────────────────────────────
-// ── Pollinations AI helpers ──────────────────────────────────────────────────
+// ── AI helpers — Anthropic API (reliable, no reasoning leakage) ──────────────
 
-// Detect if a response is a reasoning leak (the whole thing is internal thinking,
-// not a passage). Returns true if the response should be discarded and retried.
-function isReasoningLeak(raw) {
-  const text = raw.trim();
-  // Starts with a JSON blob containing reasoning_content or role:assistant
-  if (text.startsWith("{") && (
-    text.includes('"reasoning_content"') ||
-    text.includes('"role":"assistant"') ||
-    text.includes('"tool_calls"')
-  )) return true;
-  // Plain text reasoning markers that indicate the model is thinking aloud
-  const markers = [
-    "reasoning_content", "tool_calls", "I'll write", "I'll craft",
-    "Let's write", "Let's count", "Let's compose", "Let me write",
-    "Word count:", "Now count words", "We need to draft", "We'll produce",
-    "We'll count", "We'll craft", "Draft:\n", "Let's verify",
-  ];
-  return markers.some(m => text.includes(m));
+// Calls the Anthropic messages API directly.
+// The API key is injected by the platform proxy — no key needed in code.
+async function callAnthropic(userMessage, systemMessage) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1024,
+      system: systemMessage,
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.text().catch(() => "");
+    throw new Error("Anthropic API error " + res.status + ": " + err.slice(0, 120));
+  }
+  const data = await res.json();
+  const text = (data.content || []).map(b => b.text || "").join("").trim();
+  if (!text || text.length < 40) throw new Error("Empty response from API");
+  return text;
 }
 
-// Passage generation — uses the Anthropic API via the in-app proxy
-// Falls back through multiple Pollinations models, skipping any that leak reasoning
+// Passage generation
 async function generateWithAI(prompt) {
-  const instruction = "Write a reading passage. Output ONLY the passage text. "
-    + "No title, no preamble, no word count, no commentary, no JSON, no reasoning. "
-    + "Start immediately with the first sentence of the passage.\n\n";
-  const body = instruction + prompt;
-  const encoded = encodeURIComponent(body);
-  const models = ["openai", "mistral", "llama", "phi"];
-  for (const model of models) {
-    try {
-      const res = await fetch(
-        "https://text.pollinations.ai/" + encoded + "?model=" + model + "&seed=" + Date.now()
-      );
-      if (!res.ok) continue;
-      const raw = await res.text();
-      // Discard and retry next model if this is a reasoning leak
-      if (isReasoningLeak(raw)) continue;
-      // Strip any accidental markdown fences
-      const text = raw.trim().replace(/^```[\w]*\n?|```$/gm, "").trim();
-      if (text && text.length >= 80) return text;
-    } catch(e) { /* try next model */ }
-  }
-  throw new Error("All AI models returned unusable output. Please try again.");
+  return callAnthropic(
+    prompt,
+    "You are a reading education assistant. Generate high-quality engaging passages for reading practice. " +
+    "Return ONLY the passage text — no title, no preamble, no word count, no commentary. " +
+    "Start immediately with the first sentence of the passage."
+  );
 }
 
 // ── AI Quiz generation ────────────────────────────────────────────────────────
-// Returns an array of 5 quiz question objects matching our QUIZZES format
+// Generates 5 comprehension questions from passage text using Anthropic API.
 async function generateQuizForPassage(passageText, passageTitle) {
-  const body = `You are a reading comprehension quiz creator. Return ONLY a raw JSON array — no markdown, no explanation, no code fences.
+  const system = "You are a reading comprehension quiz creator. " +
+    "Return ONLY a raw JSON array — no markdown, no explanation, no code fences, nothing else.";
 
-Read this passage and create exactly 5 quiz questions.
+  const userMsg =
+    "Create exactly 5 quiz questions for the passage below.\n\n" +
+    "PASSAGE:\n" + passageText.slice(0, 2500) + "\n\n" +
+    "Return a JSON array of exactly 5 objects. Each object must have:\n" +
+    '{ "id":"q1", "type":"mc", "q":"question", "choices":["A","B","C","D"], "correct":0, "exp":"explanation" }\n' +
+    'For true/false use type "tf" and choices ["True","False"].\n' +
+    "Rules: mix mc and tf, base ALL questions only on the passage, correct is zero-based index.\n" +
+    "Output ONLY the JSON array starting with [";
 
-PASSAGE:
-${passageText.slice(0, 2000)}
+  const raw = await callAnthropic(userMsg, system);
 
-Return a JSON array of exactly 5 objects. Each object:
-{ "id":"q1", "type":"mc", "q":"question text", "choices":["A","B","C","D"], "correct":0, "exp":"one sentence explanation" }
-For true/false: { "id":"q2", "type":"tf", "q":"statement", "choices":["True","False"], "correct":0, "exp":"..." }
-
-Rules: mix mc and tf, base questions ONLY on the passage, correct is zero-based index. Output ONLY the JSON array starting with [`;
-
-  const encoded = encodeURIComponent(body);
-  const res = await fetch(`https://text.pollinations.ai/${encoded}?model=mistral&seed=${Date.now()}`);
-  if (!res.ok) throw new Error("Quiz generation failed");
-  const raw = await res.text();
-
-  // Aggressively find the JSON array — strip any reasoning preamble
+  // Extract JSON array robustly
   const cleaned = raw.replace(/```json|```/g, "").trim();
   const start = cleaned.indexOf("[");
   const end   = cleaned.lastIndexOf("]");
-  if (start === -1 || end === -1) throw new Error("No JSON array found in response");
+  if (start === -1 || end === -1) throw new Error("No JSON array in quiz response");
   const parsed = JSON.parse(cleaned.slice(start, end + 1));
   if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid quiz array");
 
   return parsed.slice(0, 5).map((q, i) => ({
-    id:      q.id      || `q${i+1}`,
+    id:      q.id      || "q" + (i + 1),
     type:    q.type    || "mc",
     q:       q.q       || q.question || "Question",
-    choices: Array.isArray(q.choices) ? q.choices : ["True","False"],
+    choices: Array.isArray(q.choices) ? q.choices : ["True", "False"],
     correct: typeof q.correct === "number" ? q.correct : 0,
     exp:     q.exp     || q.explanation || "See passage.",
   }));

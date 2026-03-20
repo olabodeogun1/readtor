@@ -205,63 +205,50 @@ const QUIZZES = {
 // ── Pollinations AI ───────────────────────────────────────────────────────────
 // ── Pollinations AI helpers ──────────────────────────────────────────────────
 
-// Strips reasoning/thinking leakage from Pollinations responses.
-// Some model runs return {"role":"assistant","reasoning_content":"..."} or
-// raw chain-of-thought before/instead of the actual content.
-function cleanPassageResponse(raw) {
-  // If the whole response looks like JSON (reasoning leak), try to extract content
-  const trimmed = raw.trim();
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      // Common leak shapes
-      const text =
-        parsed.content ||
-        parsed.text    ||
-        (Array.isArray(parsed.choices) && parsed.choices[0]?.message?.content) ||
-        null;
-      if (text && typeof text === "string" && text.length > 80) return text.trim();
-    } catch(e) { /* not valid JSON, fall through */ }
-  }
-
-  // Strip any leading JSON block or reasoning block before the actual prose.
-  // Reasoning often appears before a blank line then the real passage.
-  // Pattern: large JSON-like block ending with }  then newlines then prose.
-  const afterJsonBlock = trimmed.replace(/^\{[\s\S]*?\}\s*/m, "").trim();
-  if (afterJsonBlock.length > 80 && !afterJsonBlock.startsWith("{")) {
-    return afterJsonBlock;
-  }
-
-  // Strip markdown fences
-  const noFence = trimmed.replace(/^```[\w]*
-?|```$/gm, "").trim();
-
-  // If there is a blank-line separator and what comes after looks like prose, use that
-  const parts = noFence.split(/
-{2,}/);
-  // Find the first part that is clearly prose (no curly braces, reasonable length)
-  const prosePart = parts.find(p => p.length > 80 && !p.trim().startsWith("{") && !p.trim().startsWith("["));
-  if (prosePart) return prosePart.trim();
-
-  return noFence;
+// Detect if a response is a reasoning leak (the whole thing is internal thinking,
+// not a passage). Returns true if the response should be discarded and retried.
+function isReasoningLeak(raw) {
+  const text = raw.trim();
+  // Starts with a JSON blob containing reasoning_content or role:assistant
+  if (text.startsWith("{") && (
+    text.includes('"reasoning_content"') ||
+    text.includes('"role":"assistant"') ||
+    text.includes('"tool_calls"')
+  )) return true;
+  // Plain text reasoning markers that indicate the model is thinking aloud
+  const markers = [
+    "reasoning_content", "tool_calls", "I'll write", "I'll craft",
+    "Let's write", "Let's count", "Let's compose", "Let me write",
+    "Word count:", "Now count words", "We need to draft", "We'll produce",
+    "We'll count", "We'll craft", "Draft:\n", "Let's verify",
+  ];
+  return markers.some(m => text.includes(m));
 }
 
-// Passage generation — tries multiple models, cleans reasoning leakage
+// Passage generation — uses the Anthropic API via the in-app proxy
+// Falls back through multiple Pollinations models, skipping any that leak reasoning
 async function generateWithAI(prompt) {
-  const body = `Write a reading passage. Output ONLY the passage — no title, no preamble, no commentary, no JSON, no explanation. Begin immediately with the first sentence of the passage.\n\n${prompt}`;
+  const instruction = "Write a reading passage. Output ONLY the passage text. "
+    + "No title, no preamble, no word count, no commentary, no JSON, no reasoning. "
+    + "Start immediately with the first sentence of the passage.\n\n";
+  const body = instruction + prompt;
   const encoded = encodeURIComponent(body);
-  const models = ["mistral", "openai", "llama"];
+  const models = ["openai", "mistral", "llama", "phi"];
   for (const model of models) {
     try {
-      const res = await fetch(`https://text.pollinations.ai/${encoded}?model=${model}&seed=${Date.now()}`);
+      const res = await fetch(
+        "https://text.pollinations.ai/" + encoded + "?model=" + model + "&seed=" + Date.now()
+      );
       if (!res.ok) continue;
-      const raw  = await res.text();
-      const text = cleanPassageResponse(raw);
+      const raw = await res.text();
+      // Discard and retry next model if this is a reasoning leak
+      if (isReasoningLeak(raw)) continue;
+      // Strip any accidental markdown fences
+      const text = raw.trim().replace(/^```[\w]*\n?|```$/gm, "").trim();
       if (text && text.length >= 80) return text;
     } catch(e) { /* try next model */ }
   }
-  throw new Error("All AI models failed or returned unusable output");
-}
+  throw new Error("All AI models returned unusable output. Please try again.");
 }
 
 // ── AI Quiz generation ────────────────────────────────────────────────────────
