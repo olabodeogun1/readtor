@@ -203,57 +203,96 @@ const QUIZZES = {
 };
 
 // ── Pollinations AI ───────────────────────────────────────────────────────────
-async function generateWithAI(prompt) {
-  const system = "You are a reading education assistant. Generate high-quality engaging passages for reading practice. Return ONLY the passage text itself — no title, no label, no preamble, no commentary. Just the passage.";
-  const full = encodeURIComponent(`${system}\n\n${prompt}`);
-  const res  = await fetch(`https://text.pollinations.ai/${full}`);
-  if (!res.ok) throw new Error("AI request failed");
-  const text = await res.text();
-  if (!text || text.length < 80) throw new Error("Response too short");
-  return text.trim();
+// ── Pollinations AI helpers ──────────────────────────────────────────────────
+
+// Strips reasoning/thinking leakage from Pollinations responses.
+// Some model runs return {"role":"assistant","reasoning_content":"..."} or
+// raw chain-of-thought before/instead of the actual content.
+function cleanPassageResponse(raw) {
+  // If the whole response looks like JSON (reasoning leak), try to extract content
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      // Common leak shapes
+      const text =
+        parsed.content ||
+        parsed.text    ||
+        (Array.isArray(parsed.choices) && parsed.choices[0]?.message?.content) ||
+        null;
+      if (text && typeof text === "string" && text.length > 80) return text.trim();
+    } catch(e) { /* not valid JSON, fall through */ }
+  }
+
+  // Strip any leading JSON block or reasoning block before the actual prose.
+  // Reasoning often appears before a blank line then the real passage.
+  // Pattern: large JSON-like block ending with }  then newlines then prose.
+  const afterJsonBlock = trimmed.replace(/^\{[\s\S]*?\}\s*/m, "").trim();
+  if (afterJsonBlock.length > 80 && !afterJsonBlock.startsWith("{")) {
+    return afterJsonBlock;
+  }
+
+  // Strip markdown fences
+  const noFence = trimmed.replace(/^```[\w]*
+?|```$/gm, "").trim();
+
+  // If there is a blank-line separator and what comes after looks like prose, use that
+  const parts = noFence.split(/
+{2,}/);
+  // Find the first part that is clearly prose (no curly braces, reasonable length)
+  const prosePart = parts.find(p => p.length > 80 && !p.trim().startsWith("{") && !p.trim().startsWith("["));
+  if (prosePart) return prosePart.trim();
+
+  return noFence;
 }
 
-// ── AI Quiz generation for user-uploaded / AI-generated passages ──────────────
+// Passage generation — tries multiple models, cleans reasoning leakage
+async function generateWithAI(prompt) {
+  const body = `Write a reading passage. Output ONLY the passage — no title, no preamble, no commentary, no JSON, no explanation. Begin immediately with the first sentence of the passage.\n\n${prompt}`;
+  const encoded = encodeURIComponent(body);
+  const models = ["mistral", "openai", "llama"];
+  for (const model of models) {
+    try {
+      const res = await fetch(`https://text.pollinations.ai/${encoded}?model=${model}&seed=${Date.now()}`);
+      if (!res.ok) continue;
+      const raw  = await res.text();
+      const text = cleanPassageResponse(raw);
+      if (text && text.length >= 80) return text;
+    } catch(e) { /* try next model */ }
+  }
+  throw new Error("All AI models failed or returned unusable output");
+}
+}
+
+// ── AI Quiz generation ────────────────────────────────────────────────────────
 // Returns an array of 5 quiz question objects matching our QUIZZES format
 async function generateQuizForPassage(passageText, passageTitle) {
-  const prompt = `You are a reading comprehension quiz creator.
+  const body = `You are a reading comprehension quiz creator. Return ONLY a raw JSON array — no markdown, no explanation, no code fences.
 
-Read the following passage carefully, then create exactly 5 quiz questions about it.
+Read this passage and create exactly 5 quiz questions.
 
 PASSAGE:
-"""
 ${passageText.slice(0, 2000)}
-"""
 
-Return ONLY a valid JSON array with exactly 5 objects. No extra text, no markdown, no code fences — just the raw JSON array.
+Return a JSON array of exactly 5 objects. Each object:
+{ "id":"q1", "type":"mc", "q":"question text", "choices":["A","B","C","D"], "correct":0, "exp":"one sentence explanation" }
+For true/false: { "id":"q2", "type":"tf", "q":"statement", "choices":["True","False"], "correct":0, "exp":"..." }
 
-Each object must have:
-- "id": "q1", "q2", "q3", "q4", "q5"
-- "type": "mc" (multiple choice) or "tf" (true/false)
-- "q": the question string
-- "choices": array of exactly 4 strings (for "mc") or ["True","False"] (for "tf")
-- "correct": zero-based index of the correct choice
-- "exp": one sentence explanation of the correct answer, referencing the passage
+Rules: mix mc and tf, base questions ONLY on the passage, correct is zero-based index. Output ONLY the JSON array starting with [`;
 
-Mix mc and tf types. Base ALL questions strictly on what the passage says — no outside knowledge.`;
-
-  const encoded = encodeURIComponent(
-    "You are a quiz creator. Return only raw JSON, no markdown.\n\n" + prompt
-  );
-  const res = await fetch(`https://text.pollinations.ai/${encoded}`);
+  const encoded = encodeURIComponent(body);
+  const res = await fetch(`https://text.pollinations.ai/${encoded}?model=mistral&seed=${Date.now()}`);
   if (!res.ok) throw new Error("Quiz generation failed");
   const raw = await res.text();
 
-  // Strip any accidental markdown fences
+  // Aggressively find the JSON array — strip any reasoning preamble
   const cleaned = raw.replace(/```json|```/g, "").trim();
-  // Find the JSON array
   const start = cleaned.indexOf("[");
   const end   = cleaned.lastIndexOf("]");
   if (start === -1 || end === -1) throw new Error("No JSON array found in response");
   const parsed = JSON.parse(cleaned.slice(start, end + 1));
   if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid quiz array");
 
-  // Validate + normalise each question
   return parsed.slice(0, 5).map((q, i) => ({
     id:      q.id      || `q${i+1}`,
     type:    q.type    || "mc",
