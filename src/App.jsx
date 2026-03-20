@@ -25,7 +25,7 @@ const styleEl = document.createElement("style");
 styleEl.textContent = globalCSS;
 document.head.appendChild(styleEl);
 
-const T = {
+const DARK = {
   bg:        "#07080f",
   surface:   "#0d0f1c",
   card:      "#111420",
@@ -45,6 +45,62 @@ const T = {
   sans:      "'DM Sans', sans-serif",
   mono:      "'DM Mono', monospace",
 };
+
+// ── Light theme ──────────────────────────────────────────────────────────────
+const LIGHT = {
+  bg:        "#f7f5f0",
+  surface:   "#ffffff",
+  card:      "#f0ede6",
+  card2:     "#e8e4db",
+  border:    "#d4cfc4",
+  border2:   "#c4bfb4",
+  text:      "#1a1814",
+  text2:     "#4a4640",
+  text3:     "#8a8680",
+  amber:     "#c47d10",
+  amber2:    "#d4920a",
+  amberGlow: "rgba(196,125,16,0.12)",
+  teal:      "#1a9e88",
+  teal2:     "#1db89e",
+  red:       "#cc3333",
+  serif:     "'Playfair Display', Georgia, serif",
+  sans:      "'DM Sans', sans-serif",
+  mono:      "'DM Mono', monospace",
+};
+
+// Theme accessor — T is reassigned based on dark/light mode
+let T = DARK;
+function getTheme(isDark) { return isDark ? DARK : LIGHT; }
+
+// ── Rate limit helpers (localStorage) ────────────────────────────────────────
+const RATE_KEY    = "readtor_gen_timestamps";
+const RATE_LIMIT  = 5;
+const RATE_WINDOW = 24 * 60 * 60 * 1000; // 24 hours in ms
+
+function getGenTimestamps() {
+  try { return JSON.parse(localStorage.getItem(RATE_KEY) || "[]"); } catch(e) { return []; }
+}
+function pruneTimestamps(ts) {
+  const cutoff = Date.now() - RATE_WINDOW;
+  return ts.filter(t => t > cutoff);
+}
+function canGenerate() {
+  return pruneTimestamps(getGenTimestamps()).length < RATE_LIMIT;
+}
+function recordGeneration() {
+  const ts = pruneTimestamps(getGenTimestamps());
+  ts.push(Date.now());
+  localStorage.setItem(RATE_KEY, JSON.stringify(ts));
+}
+function generationsUsed() {
+  return pruneTimestamps(getGenTimestamps()).length;
+}
+function nextResetMs() {
+  const ts = pruneTimestamps(getGenTimestamps());
+  if (ts.length === 0) return 0;
+  const oldest = Math.min(...ts);
+  return Math.max(0, oldest + RATE_WINDOW - Date.now());
+}
 
 const LEVELS = [
   { n:1,  min:100, max:149, comp:60, title:"Novice"       },
@@ -287,11 +343,8 @@ async function generateWithAI(prompt) {
   const body = "Write a reading passage. Output ONLY the passage text — no title, no preamble, "
     + "no word count, no commentary. Start immediately with the first sentence.\n\n" + prompt;
   const encoded = encodeURIComponent(body);
-  // Anonymous requests to text.pollinations.ai work without model param.
-  // seed must be a u32 (max 2147483647) — Date.now() is too large.
-  const seed = Date.now() % 2147483647;
   try {
-    const res = await fetch("https://text.pollinations.ai/" + encoded + "?seed=" + seed);
+    const res = await fetch("https://text.pollinations.ai/" + encoded);
     if (!res.ok) throw new Error("HTTP " + res.status);
     const raw  = await res.text();
     const text = extractPassageFromPollinations(raw);
@@ -314,9 +367,7 @@ async function generateQuizForPassage(passageText, passageTitle) {
     + "Output ONLY the JSON array starting with [";
 
   const encoded = encodeURIComponent(body);
-  const seed    = Date.now() % 2147483647;
-
-  const res = await fetch("https://text.pollinations.ai/" + encoded + "?seed=" + seed);
+  const res = await fetch("https://text.pollinations.ai/" + encoded);
   if (!res.ok) throw new Error("Quiz generation failed — HTTP " + res.status);
   const raw = await res.text();
 
@@ -548,6 +599,11 @@ const ICONS = {
   x:        "M18 6L6 18M6 6l12 12",
   arrow:    "M5 12h14M12 5l7 7-7 7",
   trash:    ["M3 6h18","M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6","M10 11v6","M14 11v6","M9 6V4h6v2"],
+  tips:     ["M12 2a10 10 0 100 20 10 10 0 000-20z","M12 16v-4","M12 8h.01"],
+  moon:     "M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z",
+  sun:      ["M12 1v2","M12 21v2","M4.22 4.22l1.42 1.42","M18.36 18.36l1.42 1.42","M1 12h2","M21 12h2","M4.22 19.78l1.42-1.42","M18.36 5.64l1.42-1.42","M12 5a7 7 0 100 14A7 7 0 0012 5z"],
+  volume:   ["M11 5L6 9H2v6h4l5 4V5z","M19.07 4.93a10 10 0 010 14.14","M15.54 8.46a5 5 0 010 7.07"],
+  volumeOff:["M11 5L6 9H2v6h4l5 4V5z","M23 9l-6 6","M17 9l6 6"],
 };
 
 const Btn = ({ children, onClick, variant="primary", disabled, style={}, size="md" }) => {
@@ -594,6 +650,13 @@ export default function App() {
   const [user,          setUser]          = useState(null);
   const [isGuest,       setIsGuest]       = useState(false);
   const [sessions,      setSessions]      = useState([]);
+  const [darkMode,      setDarkMode]      = useState(()=>localStorage.getItem('readtor_theme')!=='light');
+  // Reassign T on every render so all components pick up theme changes
+  Object.assign(T, darkMode ? DARK : LIGHT);
+  const toggleTheme = () => {
+    setDarkMode(d => { const next=!d; localStorage.setItem('readtor_theme',next?'dark':'light'); return next; });
+  };
+
   const [uploads,       setUploads]       = useState([]);   // ★ saved uploads
   const [aiPassages,    setAIPassages]    = useState([]);   // ★ public community AI passages
   const [myAIPassages,  setMyAIPassages]  = useState([]);   // ★ current user's own AI passages (all)
@@ -820,11 +883,12 @@ export default function App() {
   if (view==="auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} />;
 
   const NAV = [
-    { id:"dashboard", label:"Dashboard",   icon:"home"     },
-    { id:"library",   label:"Library",     icon:"library"  },
-    { id:"generate",  label:"AI Generate", icon:"generate" },
-    { id:"flashcards",label:"Flashcards",  icon:"cards",   badge:dueCards },
-    { id:"upload",    label:"Upload",      icon:"upload"   },
+    { id:"dashboard",    label:"Dashboard",     icon:"home"     },
+    { id:"library",      label:"Library",       icon:"library"  },
+    { id:"generate",     label:"AI Generate",   icon:"generate" },
+    { id:"flashcards",   label:"Flashcards",    icon:"cards",   badge:dueCards },
+    { id:"upload",       label:"Upload",        icon:"upload"   },
+    { id:"readingtips",  label:"Reading Tips",  icon:"tips"     },
   ];
 
   return (
@@ -869,14 +933,15 @@ export default function App() {
       )}
 
       <main style={{flex:1,marginLeft:["reading","quiz","results"].includes(view)?0:220,minHeight:"100vh",overflow:"auto"}}>
-        {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView}/>}
-        {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify}/>}
-        {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz}/>}
-        {view==="flashcards" && <FlashcardsView flashcards={flashcards} setFlashcards={setFlashcards}/>}
-        {view==="upload"     && <UploadView     onStart={startReading} notify={notify} uploads={uploads} isGuest={isGuest} userId={user?.id} onSave={handleSaveUpload} onDelete={handleDeleteUpload}/>}
+        {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="flashcards" && <FlashcardsView flashcards={flashcards} setFlashcards={setFlashcards} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="upload"     && <UploadView     onStart={startReading} notify={notify} uploads={uploads} isGuest={isGuest} userId={user?.id} onSave={handleSaveUpload} onDelete={handleDeleteUpload} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="reading"    && activePassage && <ReadingView  passage={activePassage} onFinish={finishReading} onExit={()=>setView("dashboard")}/>}
         {view==="quiz"       && quizSession   && <QuizView     passage={quizSession.passage} sessionData={quizSession.sessionData} onSubmit={submitQuiz} onExit={()=>setView("dashboard")} dynamicQuestions={pendingQuiz}/>}
         {view==="results"    && lastResults   && <ResultsView  results={lastResults} onDone={()=>setView("dashboard")} onFlashcards={()=>setView("flashcards")}/>}
+        {view==="readingtips" && <ReadingTipsView darkMode={darkMode} toggleTheme={toggleTheme}/>}
       </main>
 
       {toast && (
@@ -984,10 +1049,27 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
   );
 }
 
+// ── Reusable theme toggle button (top-right of every content page) ──────────
+function ThemeToggleBtn({ darkMode, toggleTheme }) {
+  return (
+    <button onClick={toggleTheme}
+      title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+      style={{position:"fixed",top:16,right:20,zIndex:200,display:"flex",alignItems:"center",gap:7,
+        padding:"7px 14px",borderRadius:20,border:`1px solid ${T.border2}`,
+        background:T.card,color:T.text2,cursor:"pointer",fontSize:12,fontWeight:500,
+        boxShadow:"0 2px 12px rgba(0,0,0,0.25)",transition:"all 0.2s"}}
+      onMouseEnter={e=>{e.currentTarget.style.borderColor=T.amber;e.currentTarget.style.color=T.amber;}}
+      onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border2;e.currentTarget.style.color=T.text2;}}>
+      <SVG d={darkMode ? ICONS.sun : ICONS.moon} size={14} stroke="currentColor"/>
+      {darkMode ? "Light" : "Dark"}
+    </button>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DASHBOARD — ★ Quick Start buttons now navigate correctly
 // ─────────────────────────────────────────────────────────────────────────────
-function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView }) {
+function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, darkMode, toggleTheme }) {
   const level    = LEVELS[(user?.level||1)-1];
   const quote    = QUOTES[new Date().getDate()%QUOTES.length];
   const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.wpm||0),0)/sessions.length) : 0;
@@ -1004,6 +1086,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView }
 
   return (
     <div style={{padding:"40px 48px",maxWidth:1200}}>
+      <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:40,animation:"fadeUp 0.4s ease both"}}>
         <div>
           <div style={{fontSize:13,color:T.text3,marginBottom:6,letterSpacing:.5}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
@@ -1136,7 +1219,7 @@ function PassageRow({ passage, onStart }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // LIBRARY
 // ─────────────────────────────────────────────────────────────────────────────
-function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onDeleteAI, onRegenerateQuiz, notify }) {
+function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onDeleteAI, onRegenerateQuiz, notify, darkMode, toggleTheme }) {
   const [tab,    setTab]    = useState("curated");  // "curated" | "community" | "mine"
   const [genre,  setGenre]  = useState("all");
   const [search, setSearch] = useState("");
@@ -1178,6 +1261,7 @@ function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onD
 
   return (
     <div style={{padding:"40px 48px"}}>
+      <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
         <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Library</h1>
         <p style={{color:T.text3,fontSize:15}}>Curated passages, community AI passages, and your own generations.</p>
@@ -1327,58 +1411,151 @@ function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onD
 // READING VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function ReadingView({ passage, onFinish, onExit }) {
-  const [mode,     setMode]     = useState("highlight");
-  const [wpm,      setWpm]      = useState(250);
-  const [playing,  setPlaying]  = useState(false);
-  const [wordIdx,  setWordIdx]  = useState(0);
-  const [elapsed,  setElapsed]  = useState(0);
-  const [startTs,  setStartTs]  = useState(null);
-  const [fontSize, setFontSize] = useState(18);
-  const timerRef = useRef(null);
-  const clockRef = useRef(null);
-  const words    = passage.text.split(/\s+/);
-  const progress = words.length>1?(wordIdx/(words.length-1))*100:0;
-  const liveWpm  = elapsed>4?Math.round((wordIdx/elapsed)*60):wpm;
+  const [mode,      setMode]      = useState("highlight");
+  const [wpm,       setWpm]       = useState(250);
+  const [playing,   setPlaying]   = useState(false);
+  const [wordIdx,   setWordIdx]   = useState(0);
+  const [elapsed,   setElapsed]   = useState(0);
+  const [startTs,   setStartTs]   = useState(null);
+  const [fontSize,  setFontSize]  = useState(18);
+  const [countdown, setCountdown] = useState(null);  // 3,2,1,null = playing
+  const [focusMode, setFocusMode] = useState(false); // RSVP bionic focus
+  const [audioOn,   setAudioOn]   = useState(false); // TTS audio
+  const timerRef    = useRef(null);
+  const clockRef    = useRef(null);
+  const utterRef    = useRef(null);
+  const words       = passage.text.split(/\s+/);
+  const progress    = words.length > 1 ? (wordIdx / (words.length - 1)) * 100 : 0;
+  const liveWpm     = elapsed > 4 ? Math.round((wordIdx / elapsed) * 60) : wpm;
 
-  const tick = useCallback(()=>{
-    setWordIdx(prev=>{if(prev+1>=words.length){setPlaying(false);return words.length-1;}return prev+1;});
-  },[words.length]);
+  // ── Focus mode: highlight middle character of each word in amber ──────────
+  function renderFocusWord(word) {
+    if (word.length === 0) return <span>{word}</span>;
+    const midIdx = Math.floor(word.length / 2);
+    const before = word.slice(0, midIdx);
+    const mid    = word.slice(midIdx, midIdx + 1);
+    const after  = word.slice(midIdx + 1);
+    return (
+      <span>
+        <span style={{color: T.text}}>{before}</span>
+        <span style={{color: T.amber, fontWeight: 900, fontSize:"1.1em"}}>{mid}</span>
+        <span style={{color: T.text}}>{after}</span>
+      </span>
+    );
+  }
 
-  useEffect(()=>{
-    if(playing){const ms=(60/wpm)*1000;timerRef.current=setInterval(tick,ms);}
+  // ── Audio (TTS) ───────────────────────────────────────────────────────────
+  const toggleAudio = () => {
+    if (audioOn) {
+      window.speechSynthesis.cancel();
+      setAudioOn(false);
+    } else {
+      window.speechSynthesis.cancel();
+      const utt = new SpeechSynthesisUtterance(passage.text);
+      utt.rate  = Math.min(2, Math.max(0.5, wpm / 180));
+      utt.onend = () => setAudioOn(false);
+      utterRef.current = utt;
+      window.speechSynthesis.speak(utt);
+      setAudioOn(true);
+    }
+  };
+
+  // Stop audio when leaving
+  useEffect(() => () => window.speechSynthesis.cancel(), []);
+
+  // ── RSVP tick ─────────────────────────────────────────────────────────────
+  const tick = useCallback(() => {
+    setWordIdx(prev => {
+      if (prev + 1 >= words.length) { setPlaying(false); return words.length - 1; }
+      return prev + 1;
+    });
+  }, [words.length]);
+
+  useEffect(() => {
+    if (playing) { const ms = (60/wpm)*1000; timerRef.current = setInterval(tick, ms); }
     else clearInterval(timerRef.current);
-    return()=>clearInterval(timerRef.current);
-  },[playing,wpm,tick]);
+    return () => clearInterval(timerRef.current);
+  }, [playing, wpm, tick]);
 
-  useEffect(()=>{
-    if(playing){if(!startTs)setStartTs(Date.now());clockRef.current=setInterval(()=>setElapsed(e=>e+1),1000);}
-    else clearInterval(clockRef.current);
-    return()=>clearInterval(clockRef.current);
-  },[playing]);
+  useEffect(() => {
+    if (playing) {
+      if (!startTs) setStartTs(Date.now());
+      clockRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+    } else clearInterval(clockRef.current);
+    return () => clearInterval(clockRef.current);
+  }, [playing]);
 
-  const finish = ()=>{const t=Math.max(elapsed,1);onFinish({passage,wpm:Math.round((wordIdx/t)*60)||wpm,comp:0,wordsRead:wordIdx,timeSeconds:t,ts:Date.now()});};
-  const CHUNK=6; const chunks=[];
-  for(let i=0;i<words.length;i+=CHUNK)chunks.push({words:words.slice(i,i+CHUNK),start:i,active:wordIdx>=i&&wordIdx<i+CHUNK});
+  // ── 3-second RSVP countdown ───────────────────────────────────────────────
+  const startRSVP = () => {
+    if (mode !== "rsvp") { setPlaying(p => !p); return; }
+    if (playing) { setPlaying(false); return; }
+    setCountdown(3);
+    let count = 3;
+    const id = setInterval(() => {
+      count--;
+      if (count <= 0) {
+        clearInterval(id);
+        setCountdown(null);
+        setPlaying(true);
+      } else {
+        setCountdown(count);
+      }
+    }, 1000);
+  };
+
+  const finish = () => {
+    window.speechSynthesis.cancel();
+    const t = Math.max(elapsed, 1);
+    onFinish({ passage, wpm: Math.round((wordIdx/t)*60)||wpm, comp:0, wordsRead:wordIdx, timeSeconds:t, ts:Date.now() });
+  };
+
+  const CHUNK = 6; const chunks = [];
+  for (let i = 0; i < words.length; i += CHUNK)
+    chunks.push({ words: words.slice(i, i+CHUNK), start:i, active: wordIdx >= i && wordIdx < i+CHUNK });
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100vh",background:T.bg}}>
+      {/* Top bar */}
       <div style={{padding:"14px 32px",borderBottom:`1px solid ${T.border}`,background:T.surface,display:"flex",alignItems:"center",gap:20,flexShrink:0}}>
-        <button onClick={onExit} style={{background:"none",border:"none",cursor:"pointer",color:T.text3,fontSize:13,display:"flex",alignItems:"center",gap:6}} onMouseEnter={e=>e.currentTarget.style.color=T.red} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>
+        <button onClick={onExit} style={{background:"none",border:"none",cursor:"pointer",color:T.text3,fontSize:13,display:"flex",alignItems:"center",gap:6}}
+          onMouseEnter={e=>e.currentTarget.style.color=T.red} onMouseLeave={e=>e.currentTarget.style.color=T.text3}>
           <SVG d={ICONS.x} size={16} stroke="currentColor"/> Exit
         </button>
         <div style={{fontFamily:T.serif,fontSize:17,fontWeight:700,color:T.text,flex:1,textAlign:"center"}}>{passage.title}</div>
         <div style={{display:"flex",gap:16,alignItems:"center"}}>
+          {/* Audio button */}
+          <button onClick={toggleAudio} title={audioOn?"Stop audio":"Read aloud"}
+            style={{background:audioOn?`${T.teal}22`:"none",border:`1px solid ${audioOn?T.teal:T.border}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,color:audioOn?T.teal:T.text3,transition:"all 0.15s"}}>
+            <SVG d={audioOn?ICONS.volumeOff:ICONS.volume} size={15} stroke="currentColor"/>
+            <span style={{fontSize:11}}>{audioOn?"Stop":"Audio"}</span>
+          </button>
           <div style={{textAlign:"right"}}><div style={{fontFamily:T.mono,fontSize:22,fontWeight:700,color:T.amber}}>{liveWpm}</div><div style={{fontSize:10,color:T.text3,letterSpacing:.5}}>WPM</div></div>
           <div style={{textAlign:"right"}}><div style={{fontFamily:T.mono,fontSize:18,color:T.teal}}>{Math.round(progress)}%</div><div style={{fontSize:10,color:T.text3,letterSpacing:.5}}>done</div></div>
         </div>
       </div>
-      <div style={{height:3,background:T.card,flexShrink:0}}><div style={{height:"100%",background:`linear-gradient(90deg,${T.amber},${T.amber2})`,width:`${progress}%`,transition:"width 0.2s"}}/></div>
-      <div style={{padding:"12px 32px",borderBottom:`1px solid ${T.border}`,background:T.surface,display:"flex",alignItems:"center",gap:16,flexShrink:0}}>
+
+      {/* Progress bar */}
+      <div style={{height:3,background:T.card,flexShrink:0}}>
+        <div style={{height:"100%",background:`linear-gradient(90deg,${T.amber},${T.amber2})`,width:`${progress}%`,transition:"width 0.2s"}}/>
+      </div>
+
+      {/* Controls */}
+      <div style={{padding:"12px 32px",borderBottom:`1px solid ${T.border}`,background:T.surface,display:"flex",alignItems:"center",gap:16,flexShrink:0,flexWrap:"wrap"}}>
         <div style={{display:"flex",gap:4}}>
           {[["highlight","Highlight"],["rsvp","RSVP"],["scroll","Scroll"]].map(([m,l])=>(
-            <button key={m} onClick={()=>{setMode(m);setPlaying(false);setWordIdx(0);}} style={{padding:"6px 14px",borderRadius:6,border:`1px solid ${mode===m?T.amber:T.border}`,background:mode===m?T.amberGlow:"transparent",color:mode===m?T.amber:T.text3,cursor:"pointer",fontSize:13,fontWeight:mode===m?600:400,transition:"all 0.15s"}}>{l}</button>
+            <button key={m} onClick={()=>{setMode(m);setPlaying(false);setWordIdx(0);setCountdown(null);}}
+              style={{padding:"6px 14px",borderRadius:6,border:`1px solid ${mode===m?T.amber:T.border}`,background:mode===m?T.amberGlow:"transparent",color:mode===m?T.amber:T.text3,cursor:"pointer",fontSize:13,fontWeight:mode===m?600:400,transition:"all 0.15s"}}>{l}</button>
           ))}
         </div>
+
+        {/* Focus mode toggle — only for RSVP */}
+        {mode === "rsvp" && (
+          <button onClick={()=>setFocusMode(f=>!f)}
+            style={{padding:"5px 12px",borderRadius:6,border:`1px solid ${focusMode?T.teal:T.border}`,background:focusMode?`${T.teal}18`:"transparent",color:focusMode?T.teal:T.text3,cursor:"pointer",fontSize:12,fontWeight:focusMode?600:400,transition:"all 0.15s"}}>
+            👁 Focus
+          </button>
+        )}
+
         <div style={{height:20,width:1,background:T.border}}/>
         <div style={{display:"flex",alignItems:"center",gap:10,flex:1}}>
           <span style={{fontSize:12,color:T.text3,whiteSpace:"nowrap"}}>Speed</span>
@@ -1393,18 +1570,65 @@ function ReadingView({ passage, onFinish, onExit }) {
         </div>
         <div style={{height:20,width:1,background:T.border}}/>
         <div style={{display:"flex",gap:8}}>
-          {mode!=="scroll"&&<Btn onClick={()=>setPlaying(p=>!p)} variant={playing?"secondary":"primary"} size="sm">{playing?<>⏸ Pause</>:<>▶ Play</>}</Btn>}
+          {mode !== "scroll" && (
+            <Btn onClick={startRSVP} variant={playing?"secondary":"primary"} size="sm" disabled={countdown!==null}>
+              {countdown !== null ? `Starting in ${countdown}…` : playing ? <>⏸ Pause</> : <>▶ Play</>}
+            </Btn>
+          )}
           <Btn onClick={finish} variant="teal" size="sm">Finish & Quiz →</Btn>
         </div>
       </div>
-      <div style={{flex:1,overflow:"auto",display:"flex",alignItems:mode==="rsvp"?"center":"flex-start",justifyContent:"center"}}>
-        {mode==="rsvp"&&<div style={{textAlign:"center",padding:40}}><div style={{fontFamily:T.serif,fontSize:Math.max(48,fontSize*2.5),color:T.text,minHeight:100,display:"flex",alignItems:"center",justifyContent:"center",animation:"rsvpIn 0.25s ease both"}} key={wordIdx}><span style={{color:T.amber}}>{words[wordIdx]}</span></div><div style={{fontSize:13,color:T.text3,marginTop:24,fontFamily:T.mono}}>{wordIdx+1} / {words.length} words</div></div>}
-        {mode==="highlight"&&<div style={{maxWidth:760,padding:"48px 64px",lineHeight:2.2,fontSize:fontSize,color:T.text,fontFamily:T.serif}}>{chunks.map((c,i)=><span key={i} style={{background:c.active?`${T.amber}2a`:"transparent",borderRadius:4,padding:"2px 0",transition:"background 0.15s"}}>{c.words.join(" ")}{" "}</span>)}</div>}
-        {mode==="scroll"&&<div style={{maxWidth:720,padding:"48px 64px",fontSize:fontSize,fontFamily:T.serif,lineHeight:2.2,color:T.text}}>{passage.text.split("\n\n").map((para,i)=><p key={i} style={{marginBottom:"1.8em"}}>{para}</p>)}<div style={{marginTop:40,paddingTop:24,borderTop:`1px solid ${T.border}`,display:"flex",justifyContent:"flex-end"}}><Btn onClick={finish} variant="teal">Finished — Take Quiz →</Btn></div></div>}
+
+      {/* Reading area */}
+      <div style={{flex:1,overflow:"auto",display:"flex",alignItems:mode==="rsvp"?"center":"flex-start",justifyContent:"center",position:"relative"}}>
+
+        {/* RSVP mode */}
+        {mode === "rsvp" && (
+          <div style={{textAlign:"center",padding:40}}>
+            {/* Countdown overlay */}
+            {countdown !== null && (
+              <div style={{position:"fixed",inset:0,background:"rgba(7,8,15,0.85)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:100}}>
+                <div style={{fontFamily:T.serif,fontSize:120,fontWeight:900,color:T.amber,lineHeight:1,animation:"fadeIn 0.3s ease both"}}>{countdown}</div>
+                <div style={{fontSize:18,color:T.text2,marginTop:16}}>Get ready to read…</div>
+              </div>
+            )}
+            <div style={{fontFamily:T.serif,fontSize:Math.max(48,fontSize*2.5),color:T.text,minHeight:100,display:"flex",alignItems:"center",justifyContent:"center",animation:"rsvpIn 0.25s ease both",letterSpacing:-0.5}} key={wordIdx}>
+              {focusMode ? renderFocusWord(words[wordIdx]) : <span style={{color:T.amber}}>{words[wordIdx]}</span>}
+            </div>
+            <div style={{fontSize:13,color:T.text3,marginTop:24,fontFamily:T.mono}}>{wordIdx+1} / {words.length} words</div>
+            {focusMode && (
+              <div style={{marginTop:12,fontSize:11,color:T.text3}}>
+                <span style={{color:T.amber,fontWeight:700}}>Bold</span> = focus anchor · white = rest of word
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Highlight mode */}
+        {mode === "highlight" && (
+          <div style={{maxWidth:760,padding:"48px 64px",lineHeight:2.2,fontSize:fontSize,color:T.text,fontFamily:T.serif}}>
+            {chunks.map((c,i)=>(
+              <span key={i} style={{background:c.active?`${T.amber}2a`:"transparent",borderRadius:4,padding:"2px 0",transition:"background 0.15s"}}>
+                {c.words.join(" ")}{" "}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Scroll mode */}
+        {mode === "scroll" && (
+          <div style={{maxWidth:720,padding:"48px 64px",fontSize:fontSize,fontFamily:T.serif,lineHeight:2.2,color:T.text}}>
+            {passage.text.split("\n\n").map((para,i)=><p key={i} style={{marginBottom:"1.8em"}}>{para}</p>)}
+            <div style={{marginTop:40,paddingTop:24,borderTop:`1px solid ${T.border}`,display:"flex",justifyContent:"flex-end"}}>
+              <Btn onClick={finish} variant="teal">Finished — Take Quiz →</Btn>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QUIZ VIEW — ★ accepts dynamicQuestions for uploads/AI passages
@@ -1557,7 +1781,7 @@ function ResultsView({ results, onDone, onFlashcards }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GENERATE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
-function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz }) {
+function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz, darkMode, toggleTheme }) {
   const [genre,   setGenre]   = useState("fiction");
   const [level,   setLevel]   = useState(user?.level||3);
   const [length,  setLength]  = useState(300);
@@ -1567,6 +1791,10 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
 
   const generate = async () => {
     if (isGuest) { notify("Sign up to use AI Generation","err"); return; }
+    if (!canGenerate()) {
+      notify("Daily limit reached — you can generate 5 passages per 24 hours.","err");
+      return;
+    }
     setLoading(true); setStatus("Connecting to AI...");
     try {
       const prompts = {
@@ -1604,6 +1832,7 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
         createdBy:   user?.id,
         creatorName: user?.name,
       };
+      recordGeneration(); // track for rate limit
       notify("Passage saved to library! Starting session…");
       onStart(p);
     } catch(e) { notify("Generation failed — Pollinations AI may be busy. Try again in a moment.","err"); }
@@ -1622,10 +1851,12 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
   return (
     <div style={{padding:"40px 48px",maxWidth:800}}>
       <div style={{marginBottom:40,animation:"fadeUp 0.4s ease both"}}>
-        <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>AI Generate</h1>
+        <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+      <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>AI Generate</h1>
         <p style={{color:T.text3,fontSize:15}}>Create custom passages tuned to your level — powered by Pollinations AI, completely free.</p>
       </div>
       {isGuest&&<div style={{padding:"14px 18px",background:`${T.red}11`,border:`1px solid ${T.red}33`,borderRadius:10,marginBottom:28,fontSize:14,color:T.red}}>⚠️ AI generation requires an account. Sign up — it's free.</div>}
+      {!isGuest && <RateLimitBanner/>}
       <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:16,padding:"32px 36px",animation:"fadeUp 0.4s 0.05s ease both"}}>
         <SelectGroup label="Genre" value={genre} onChange={setGenre} options={[{v:"fiction",l:"Short Fiction"},{v:"academic",l:"Academic"},{v:"vocabulary",l:"High Vocabulary"}]}/>
         <SelectGroup label="Difficulty Level" value={level} onChange={setLevel} options={LEVELS.map(l=>({v:l.n,l:`${l.n} — ${l.title}`}))}/>
@@ -1662,7 +1893,7 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
 // ─────────────────────────────────────────────────────────────────────────────
 // FLASHCARDS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
-function FlashcardsView({ flashcards, setFlashcards }) {
+function FlashcardsView({ flashcards, setFlashcards, darkMode, toggleTheme }) {
   const [idx,     setIdx]     = useState(0);
   const [flipped, setFlipped] = useState(false);
   const due = flashcards.filter(f=>f.due<=Date.now());
@@ -1676,7 +1907,8 @@ function FlashcardsView({ flashcards, setFlashcards }) {
   return (
     <div style={{padding:"40px 48px"}}>
       <div style={{marginBottom:32}}>
-        <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Flashcards</h1>
+        <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+      <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Flashcards</h1>
         <p style={{color:T.text3,fontSize:15}}>Spaced repetition for long-term retention. {due.length} card{due.length!==1?"s":""} due for review.</p>
       </div>
       {due.length===0?(
@@ -1719,7 +1951,7 @@ function FlashcardsView({ flashcards, setFlashcards }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // UPLOAD VIEW — ★ completely rebuilt with saved texts library
 // ─────────────────────────────────────────────────────────────────────────────
-function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelete }) {
+function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelete, darkMode, toggleTheme }) {
   const [title,   setTitle]   = useState("");
   const [text,    setText]    = useState("");
   const [saving,  setSaving]  = useState(false);
@@ -1755,7 +1987,8 @@ function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelet
   return (
     <div style={{padding:"40px 48px",maxWidth:960}}>
       <div style={{marginBottom:32,animation:"fadeUp 0.4s ease both"}}>
-        <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Upload Text</h1>
+        <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+      <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Upload Text</h1>
         <p style={{color:T.text3,fontSize:15}}>Paste any text to practice with — articles, essays, chapters. Saved automatically to your profile.</p>
       </div>
 
@@ -1832,6 +2065,161 @@ function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelet
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RATE LIMIT BANNER — shown in GenerateView
+// ─────────────────────────────────────────────────────────────────────────────
+function RateLimitBanner() {
+  const [used,     setUsed]     = useState(generationsUsed);
+  const [timeLeft, setTimeLeft] = useState(nextResetMs);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setUsed(generationsUsed());
+      setTimeLeft(nextResetMs());
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const remaining = RATE_LIMIT - used;
+  const hrs  = Math.floor(timeLeft / 3600000);
+  const mins = Math.floor((timeLeft % 3600000) / 60000);
+  const secs = Math.floor((timeLeft % 60000) / 1000);
+  const pad  = n => String(n).padStart(2, "0");
+
+  if (remaining > 0) {
+    return (
+      <div style={{padding:"10px 16px",background:`${T.teal}11`,border:`1px solid ${T.teal}33`,borderRadius:10,marginBottom:20,display:"flex",alignItems:"center",justifyContent:"space-between",fontSize:13}}>
+        <span style={{color:T.text2}}>Daily generations used:</span>
+        <span style={{fontFamily:T.mono,fontWeight:700,color:remaining<=1?T.red:T.teal}}>
+          {used} / {RATE_LIMIT} &nbsp;·&nbsp; {remaining} remaining
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{padding:"14px 18px",background:`${T.red}11`,border:`1px solid ${T.red}33`,borderRadius:10,marginBottom:20,animation:"fadeUp 0.2s ease both"}}>
+      <div style={{fontSize:14,fontWeight:600,color:T.red,marginBottom:6}}>⏳ Daily limit reached (5/5 generations used)</div>
+      <div style={{fontSize:13,color:T.text2,marginBottom:8}}>You can generate again in:</div>
+      <div style={{fontFamily:T.mono,fontSize:28,fontWeight:700,color:T.amber,letterSpacing:2}}>
+        {pad(hrs)}:{pad(mins)}:{pad(secs)}
+      </div>
+      <div style={{fontSize:11,color:T.text3,marginTop:6}}>The limit resets 24 hours after your first generation today.</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// READING TIPS VIEW
+// ─────────────────────────────────────────────────────────────────────────────
+function ReadingTipsView({ darkMode, toggleTheme }) {
+  const [activeCategory, setActiveCategory] = useState("speed");
+
+  const TIPS = {
+    speed: {
+      label: "Speed Reading",
+      icon:  "⚡",
+      color: T.amber,
+      tips: [
+        { title:"Stop Subvocalizing", body:"Most people 'say' words in their head as they read. This limits your speed to speaking pace (~150 WPM). Practice reading without mentally pronouncing each word — your brain can process text far faster than speech." },
+        { title:"Use a Pointer", body:"Guide your eyes with a finger or pen moving steadily across each line. This reduces regression (re-reading) and trains your eyes to move in a smoother, more deliberate pattern." },
+        { title:"Expand Your Eye Span", body:"Train yourself to take in 3–4 words per eye fixation instead of one. Practice by focusing on the centre of a line and absorbing the words around it without moving your eyes to each word." },
+        { title:"Use the RSVP Mode", body:"Rapid Serial Visual Presentation eliminates eye movement entirely. Start at 200 WPM and increase by 25 WPM every session until comprehension drops, then back off slightly." },
+        { title:"Skim First, Then Read", body:"For non-fiction, skim headings, first sentences of each paragraph, and the conclusion before reading fully. Your brain processes the full text faster when it has a structural map." },
+      ]
+    },
+    comprehension: {
+      label: "Comprehension",
+      icon:  "🧠",
+      color: T.teal,
+      tips: [
+        { title:"Ask Questions Before Reading", body:"Before starting a passage, ask: What do I already know about this? What do I expect to learn? This primes your brain to actively seek information rather than passively consume words." },
+        { title:"Chunk and Summarise", body:"After every paragraph or section, pause for 3 seconds and mentally summarise the main point in one sentence. This forces active engagement and significantly improves retention." },
+        { title:"Connect to Prior Knowledge", body:"Actively link new information to things you already know. The more connections your brain makes, the stronger the memory trace. Ask: How does this relate to something I know?" },
+        { title:"Read Difficult Texts Twice", body:"First pass: read for the big picture at normal pace. Second pass: read slowly and critically. Two moderate passes beat one slow, exhausting read for both speed and retention." },
+        { title:"Spaced Repetition", body:"Review key ideas 1 day, 3 days, 7 days, and 21 days after reading. This is the single most evidence-backed technique for long-term retention. The flashcard system in Readtor uses this principle." },
+      ]
+    },
+    focus: {
+      label: "Focus & Environment",
+      icon:  "🎯",
+      color: "#a78bfa",
+      tips: [
+        { title:"The 25-Minute Rule (Pomodoro)", body:"Read in 25-minute focused blocks with 5-minute breaks. After 4 blocks, take a 20-minute break. This prevents mental fatigue and maintains high comprehension across longer sessions." },
+        { title:"Eliminate Visual Distractions", body:"Close all unnecessary browser tabs. The mere presence of a notification badge reduces cognitive capacity by up to 20% even if you don't click it." },
+        { title:"Read at Your Peak Hours", body:"Identify your daily peak cognitive window (usually 2–4 hours after waking). Schedule your most demanding reading during this window — comprehension can be 30–40% higher than off-peak." },
+        { title:"Background Sound", body:"Low-intensity ambient noise (40–70 dB) — like a coffee shop or brown noise — slightly enhances creative thinking during reading. Silence is best for highly technical material." },
+        { title:"Physical Posture", body:"Sit upright with the text at eye level. Slouching reduces oxygen flow to the brain by up to 30%. Reading while lying down is fine for light material but slows processing of complex text." },
+      ]
+    },
+    vocabulary: {
+      label: "Vocabulary Building",
+      icon:  "📖",
+      color: "#f97316",
+      tips: [
+        { title:"Context Before Dictionary", body:"When you encounter an unknown word, try to infer its meaning from context before looking it up. This active inference process burns the word into memory more effectively than passive lookup." },
+        { title:"The 1-in-10 Rule", body:"If you encounter more than 1 unknown word per 10 words, the text is too difficult for fluent reading. Drop down a level, build vocabulary, and return. Frustration reading destroys motivation." },
+        { title:"Word Families", body:"Learn words in families: if you learn 'cognition', also learn 'cognitive', 'cognisant', 'cognisance'. This multiplies your vocabulary gain from a single root word." },
+        { title:"Read Widely Across Genres", body:"Academic, literary, and journalistic writing each use different vocabulary registers. Readers who consume all three develop far richer word banks than those who stick to one genre." },
+        { title:"The Feynman Technique", body:"After reading, close the material and explain the main ideas in simple language as if teaching a child. Gaps in your explanation reveal gaps in your understanding, not just your vocabulary." },
+      ]
+    },
+    digital: {
+      label: "Digital Reading",
+      icon:  "💻",
+      color: T.teal,
+      tips: [
+        { title:"F-Pattern Awareness", body:"Eye-tracking research shows people read screens in an F-pattern: fully across the top, partially across the middle, then down the left edge. For important content, front-load key information into the first lines." },
+        { title:"Dark Mode Reduces Strain", body:"For extended reading sessions (30+ minutes), dark mode with warm amber text significantly reduces eye strain compared to white backgrounds under artificial lighting." },
+        { title:"Font Size Matters", body:"Reading comprehension improves with font sizes of 16–20px on screen. Smaller fonts increase cognitive load. Use the font size controls in each reading mode." },
+        { title:"Line Length Optimum", body:"The optimal line length for reading comprehension is 50–75 characters (about 12–14 words). Wider lines cause eyes to lose their place; narrower lines break reading flow." },
+        { title:"Avoid Passive Scrolling", body:"Passive feed-scrolling (social media) trains your brain into a shallow, fragmented attention mode. Counteract this with deliberate long-form reading sessions of at least 20 minutes." },
+      ]
+    },
+  };
+
+  const category = TIPS[activeCategory];
+
+  return (
+    <div style={{padding:"40px 48px",maxWidth:1100}}>
+      <div style={{marginBottom:36,animation:"fadeUp 0.4s ease both"}}>
+        <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+      <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Reading Tips</h1>
+        <p style={{color:T.text3,fontSize:15}}>Evidence-based techniques from reading science, cognitive psychology, and speed-reading research.</p>
+      </div>
+
+      {/* Category tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:36,flexWrap:"wrap",animation:"fadeUp 0.4s 0.05s ease both"}}>
+        {Object.entries(TIPS).map(([key, cat]) => (
+          <button key={key} onClick={()=>setActiveCategory(key)}
+            style={{padding:"10px 18px",borderRadius:10,border:`1px solid ${activeCategory===key?cat.color:T.border}`,background:activeCategory===key?`${cat.color}18`:"transparent",color:activeCategory===key?cat.color:T.text2,cursor:"pointer",fontSize:13,fontWeight:activeCategory===key?700:400,transition:"all 0.15s",display:"flex",alignItems:"center",gap:7}}>
+            {cat.icon} {cat.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tips grid */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:20,animation:"fadeUp 0.4s 0.1s ease both"}}>
+        {category.tips.map((tip, i) => (
+          <div key={tip.title} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"24px",display:"flex",flexDirection:"column",gap:10,animation:`fadeUp 0.3s ${i*0.06}s ease both`,borderLeft:`4px solid ${category.color}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontFamily:T.serif,fontSize:16,fontWeight:700,color:T.text}}>{tip.title}</span>
+            </div>
+            <p style={{fontSize:14,color:T.text2,lineHeight:1.75,margin:0}}>{tip.body}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Footer note */}
+      <div style={{marginTop:40,padding:"16px 20px",background:T.amberGlow,border:`1px solid ${T.amber}33`,borderRadius:12,animation:"fadeUp 0.4s 0.3s ease both"}}>
+        <div style={{fontFamily:T.serif,fontSize:14,fontStyle:"italic",color:T.text2,lineHeight:1.7}}>
+          "The more that you read, the more things you will know. The more that you learn, the more places you'll go." — Dr. Seuss. Practice these techniques consistently with Readtor's reading modes and track your WPM progress over time.
+        </div>
+      </div>
     </div>
   );
 }
