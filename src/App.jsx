@@ -68,9 +68,12 @@ const LIGHT = {
   mono:      "'DM Mono', monospace",
 };
 
-// Theme accessor — T is reassigned based on dark/light mode
-let T = DARK;
-function getTheme(isDark) { return isDark ? DARK : LIGHT; }
+// React context — every component reads T from here, so toggling always re-renders
+const ThemeCtx = React.createContext(DARK);
+function useTheme() { return React.useContext(ThemeCtx); }
+// Module-level T still used by top-level non-component helpers (Btn, Tag, SVG, etc.)
+// It is kept in sync by App before each render via Object.assign.
+let T = { ...DARK };
 
 // ── Rate limit helpers (localStorage) ────────────────────────────────────────
 const RATE_KEY    = "readtor_gen_timestamps";
@@ -650,11 +653,19 @@ export default function App() {
   const [user,          setUser]          = useState(null);
   const [isGuest,       setIsGuest]       = useState(false);
   const [sessions,      setSessions]      = useState([]);
-  const [darkMode,      setDarkMode]      = useState(()=>localStorage.getItem('readtor_theme')!=='light');
-  // Reassign T on every render so all components pick up theme changes
-  Object.assign(T, darkMode ? DARK : LIGHT);
+  const [darkMode, setDarkMode] = useState(
+    () => localStorage.getItem('readtor_theme') !== 'light'
+  );
+  // Derive the active theme object — new reference on every toggle
+  const theme = darkMode ? DARK : LIGHT;
+  // Keep module-level T in sync for non-context consumers (SVG helpers etc.)
+  Object.assign(T, theme);
   const toggleTheme = () => {
-    setDarkMode(d => { const next=!d; localStorage.setItem('readtor_theme',next?'dark':'light'); return next; });
+    setDarkMode(d => {
+      const next = !d;
+      localStorage.setItem('readtor_theme', next ? 'dark' : 'light');
+      return next;
+    });
   };
 
   const [uploads,       setUploads]       = useState([]);   // ★ saved uploads
@@ -880,7 +891,11 @@ export default function App() {
   };
 
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
-  if (view==="auth") return <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} />;
+  if (view==="auth") return (
+    <ThemeCtx.Provider value={theme}>
+      <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} />
+    </ThemeCtx.Provider>
+  );
 
   const NAV = [
     { id:"dashboard",    label:"Dashboard",     icon:"home"     },
@@ -892,6 +907,7 @@ export default function App() {
   ];
 
   return (
+    <ThemeCtx.Provider value={theme}>
     <div style={{display:"flex",minHeight:"100vh",background:T.bg}}>
       {!["reading","quiz","results"].includes(view) && (
         <aside style={{width:220,flexShrink:0,background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:50}}>
@@ -950,6 +966,7 @@ export default function App() {
         </div>
       )}
     </div>
+    </ThemeCtx.Provider>
   );
 }
 
@@ -957,7 +974,8 @@ export default function App() {
 // AUTH PAGE
 // ─────────────────────────────────────────────────────────────────────────────
 function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
-  const [mode,    setMode]    = useState("login");
+  const T = useTheme();
+    const [mode,    setMode]    = useState("login");
   const [email,   setEmail]   = useState("");
   const [name,    setName]    = useState("");
   const [pass,    setPass]    = useState("");
@@ -1051,7 +1069,8 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
 
 // ── Reusable theme toggle button (top-right of every content page) ──────────
 function ThemeToggleBtn({ darkMode, toggleTheme }) {
-  return (
+  const T = useTheme();
+    return (
     <button onClick={toggleTheme}
       title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
       style={{position:"fixed",top:16,right:20,zIndex:200,display:"flex",alignItems:"center",gap:7,
@@ -1070,7 +1089,8 @@ function ThemeToggleBtn({ darkMode, toggleTheme }) {
 // DASHBOARD — ★ Quick Start buttons now navigate correctly
 // ─────────────────────────────────────────────────────────────────────────────
 function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, darkMode, toggleTheme }) {
-  const level    = LEVELS[(user?.level||1)-1];
+  const T = useTheme();
+    const level    = LEVELS[(user?.level||1)-1];
   const quote    = QUOTES[new Date().getDate()%QUOTES.length];
   const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.wpm||0),0)/sessions.length) : 0;
   const avgComp  = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.comp||0),0)/sessions.length) : 0;
@@ -1200,7 +1220,8 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
 }
 
 function PassageRow({ passage, onStart }) {
-  return (
+  const T = useTheme();
+    return (
     <div style={{display:"flex",alignItems:"center",gap:16,padding:"16px 20px",background:T.card,border:`1px solid ${T.border}`,borderRadius:12,transition:"all 0.15s",cursor:"pointer"}}
       onClick={()=>onStart(passage)} onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"44"} onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
       <div style={{flex:1,minWidth:0}}>
@@ -1220,7 +1241,8 @@ function PassageRow({ passage, onStart }) {
 // LIBRARY
 // ─────────────────────────────────────────────────────────────────────────────
 function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onDeleteAI, onRegenerateQuiz, notify, darkMode, toggleTheme }) {
-  const [tab,    setTab]    = useState("curated");  // "curated" | "community" | "mine"
+  const T = useTheme();
+    const [tab,    setTab]    = useState("curated");  // "curated" | "community" | "mine"
   const [genre,  setGenre]  = useState("all");
   const [search, setSearch] = useState("");
   const [regenId, setRegenId] = useState(null); // passage id being regenerated
@@ -1411,7 +1433,8 @@ function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onD
 // READING VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function ReadingView({ passage, onFinish, onExit }) {
-  const [mode,      setMode]      = useState("highlight");
+  const T = useTheme();
+    const [mode,      setMode]      = useState("highlight");
   const [wpm,       setWpm]       = useState(250);
   const [playing,   setPlaying]   = useState(false);
   const [wordIdx,   setWordIdx]   = useState(0);
@@ -1634,7 +1657,8 @@ function ReadingView({ passage, onFinish, onExit }) {
 // QUIZ VIEW — ★ accepts dynamicQuestions for uploads/AI passages
 // ─────────────────────────────────────────────────────────────────────────────
 function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) {
-  // Priority: 1) passage already has quizJson (saved AI passage) — zero API call
+  const T = useTheme();
+    // Priority: 1) passage already has quizJson (saved AI passage) — zero API call
   //           2) dynamicQuestions generated after reading (upload / unsaved AI)
   //           3) static QUIZZES lookup for curated passages
   //           4) fallback loading state (generates on-the-fly)
@@ -1750,7 +1774,8 @@ function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) 
 // RESULTS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function ResultsView({ results, onDone, onFlashcards }) {
-  const {score,correct,total,missed,passage,sessionData}=results;
+  const T = useTheme();
+    const {score,correct,total,missed,passage,sessionData}=results;
   const grade=score>=85?["🏆","Exceptional!",T.amber]:score>=70?["⭐","Great work!",T.teal]:score>=50?["📈","Keep going!","#ffa500"]:["💪","Room to grow","#a78bfa"];
   return (
     <div style={{padding:"48px 64px",maxWidth:1000,animation:"fadeUp 0.4s ease both"}}>
@@ -1782,7 +1807,8 @@ function ResultsView({ results, onDone, onFlashcards }) {
 // GENERATE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz, darkMode, toggleTheme }) {
-  const [genre,   setGenre]   = useState("fiction");
+  const T = useTheme();
+    const [genre,   setGenre]   = useState("fiction");
   const [level,   setLevel]   = useState(user?.level||3);
   const [length,  setLength]  = useState(300);
   const [topic,   setTopic]   = useState("");
@@ -1894,7 +1920,8 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
 // FLASHCARDS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function FlashcardsView({ flashcards, setFlashcards, darkMode, toggleTheme }) {
-  const [idx,     setIdx]     = useState(0);
+  const T = useTheme();
+    const [idx,     setIdx]     = useState(0);
   const [flipped, setFlipped] = useState(false);
   const due = flashcards.filter(f=>f.due<=Date.now());
 
@@ -1952,7 +1979,8 @@ function FlashcardsView({ flashcards, setFlashcards, darkMode, toggleTheme }) {
 // UPLOAD VIEW — ★ completely rebuilt with saved texts library
 // ─────────────────────────────────────────────────────────────────────────────
 function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelete, darkMode, toggleTheme }) {
-  const [title,   setTitle]   = useState("");
+  const T = useTheme();
+    const [title,   setTitle]   = useState("");
   const [text,    setText]    = useState("");
   const [saving,  setSaving]  = useState(false);
   const [tab,     setTab]     = useState("new"); // "new" | "saved"
@@ -2073,7 +2101,8 @@ function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelet
 // RATE LIMIT BANNER — shown in GenerateView
 // ─────────────────────────────────────────────────────────────────────────────
 function RateLimitBanner() {
-  const [used,     setUsed]     = useState(generationsUsed);
+  const T = useTheme();
+    const [used,     setUsed]     = useState(generationsUsed);
   const [timeLeft, setTimeLeft] = useState(nextResetMs);
 
   useEffect(() => {
@@ -2117,7 +2146,8 @@ function RateLimitBanner() {
 // READING TIPS VIEW
 // ─────────────────────────────────────────────────────────────────────────────
 function ReadingTipsView({ darkMode, toggleTheme }) {
-  const [activeCategory, setActiveCategory] = useState("speed");
+  const T = useTheme();
+    const [activeCategory, setActiveCategory] = useState("speed");
 
   const TIPS = {
     speed: {
