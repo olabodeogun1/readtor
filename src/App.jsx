@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import { signUp, signIn, signInWithGoogle, signOut, getSession, getProfile, ensureProfile } from './auth';
 import { supabase } from './supabaseClient';
 
@@ -69,8 +69,8 @@ const LIGHT = {
 };
 
 // React context — every component reads T from here, so toggling always re-renders
-const ThemeCtx = React.createContext(DARK);
-function useTheme() { return React.useContext(ThemeCtx); }
+const ThemeCtx = createContext(DARK);
+function useTheme() { return useContext(ThemeCtx); }
 // Module-level T still used by top-level non-component helpers (Btn, Tag, SVG, etc.)
 // It is kept in sync by App before each render via Object.assign.
 let T = { ...DARK };
