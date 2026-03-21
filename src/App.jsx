@@ -11,6 +11,13 @@ const globalCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html { font-size: 16px; }
   body { background: #07080f; color: #e8e4d8; font-family: 'DM Sans', sans-serif; }
+  @media (max-width: 768px) {
+    html { font-size: 14px; }
+    .desktop-only { display: none !important; }
+  }
+  @media (min-width: 769px) {
+    .mobile-only { display: none !important; }
+  }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #2a2d3e; border-radius: 3px; }
@@ -262,6 +269,17 @@ const QUIZZES = {
 };
 
 // ── Pollinations AI ───────────────────────────────────────────────────────────
+// ── Mobile detection hook ────────────────────────────────────────────────────
+function useMobile() {
+  const [mobile, setMobile] = useState(() => window.innerWidth <= 768);
+  useEffect(() => {
+    const handler = () => setMobile(window.innerWidth <= 768);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+  return mobile;
+}
+
 // ── Pollinations AI helpers ──────────────────────────────────────────────────
 // Pollinations sometimes returns a reasoning JSON blob instead of plain text:
 //   {"role":"assistant","reasoning_content":"...thinking...draft...","tool_calls":[]}
@@ -607,6 +625,7 @@ const ICONS = {
   sun:      ["M12 1v2","M12 21v2","M4.22 4.22l1.42 1.42","M18.36 18.36l1.42 1.42","M1 12h2","M21 12h2","M4.22 19.78l1.42-1.42","M18.36 5.64l1.42-1.42","M12 5a7 7 0 100 14A7 7 0 0012 5z"],
   volume:   ["M11 5L6 9H2v6h4l5 4V5z","M19.07 4.93a10 10 0 010 14.14","M15.54 8.46a5 5 0 010 7.07"],
   volumeOff:["M11 5L6 9H2v6h4l5 4V5z","M23 9l-6 6","M17 9l6 6"],
+  book:     ["M4 19.5A2.5 2.5 0 016.5 17H20","M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"],
 };
 
 const Btn = ({ children, onClick, variant="primary", disabled, style={}, size="md" }) => {
@@ -650,6 +669,7 @@ const GoogleIcon = () => (
 // ─────────────────────────────────────────────────────────────────────────────
 export default function App() {
   const [view,          setView]          = useState("auth");
+  const [loading,       setLoading]       = useState(true);  // show splash while checking session
   const [user,          setUser]          = useState(null);
   const [isGuest,       setIsGuest]       = useState(false);
   const [sessions,      setSessions]      = useState([]);
@@ -712,6 +732,9 @@ export default function App() {
           setMyAIPassages(myAIP);
           setView("dashboard");
         } catch(e) { setView("auth"); }
+        finally { setLoading(false); }
+      } else {
+        setLoading(false);
       }
     });
   }, []);
@@ -890,10 +913,19 @@ export default function App() {
     }
   };
 
+  const mobile    = useMobile();
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
+
+  // Show splash while checking existing session
+  if (loading) return (
+    <ThemeCtx.Provider value={theme}>
+      <SplashScreen/>
+    </ThemeCtx.Provider>
+  );
+
   if (view==="auth") return (
     <ThemeCtx.Provider value={theme}>
-      <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} />
+      <AuthPage onLogin={login} onSignup={signup} onGuest={guestLogin} onGoogle={googleLogin} loadingUser={false}/>
     </ThemeCtx.Provider>
   );
 
@@ -904,18 +936,22 @@ export default function App() {
     { id:"flashcards",   label:"Flashcards",    icon:"cards",   badge:dueCards },
     { id:"upload",       label:"Upload",        icon:"upload"   },
     { id:"readingtips",  label:"Reading Tips",  icon:"tips"     },
+    { id:"books",        label:"Books",          icon:"book"     },
   ];
 
   return (
     <ThemeCtx.Provider value={theme}>
     <div style={{display:"flex",minHeight:"100vh",background:T.bg}}>
-      {!["reading","quiz","results"].includes(view) && (
-        <aside style={{width:220,flexShrink:0,background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:50}}>
+      {!["reading","quiz","results"].includes(view) && (<>
+        {/* ── Desktop sidebar ── */}
+        <aside style={{width:220,flexShrink:0,background:T.surface,borderRight:`1px solid ${T.border}`,
+          display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:50,
+          ...(mobile && {display:"none"})}}>
           <div style={{padding:"28px 20px 24px",borderBottom:`1px solid ${T.border}`}}>
             <div style={{fontFamily:T.serif,fontSize:26,fontWeight:900,color:T.amber,letterSpacing:-0.5}}>Readtor</div>
             <div style={{fontSize:11,color:T.text3,marginTop:2,letterSpacing:.5}}>Read · Absorb · Remember</div>
           </div>
-          <nav style={{flex:1,padding:"16px 10px",display:"flex",flexDirection:"column",gap:2}}>
+          <nav style={{flex:1,padding:"16px 10px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto"}}>
             {NAV.map(n=>{
               const active=view===n.id;
               return (
@@ -946,9 +982,41 @@ export default function App() {
             </button>
           </div>
         </aside>
-      )}
 
-      <main style={{flex:1,marginLeft:["reading","quiz","results"].includes(view)?0:220,minHeight:"100vh",overflow:"auto"}}>
+        {/* ── Mobile top header ── */}
+        {mobile && (
+          <div style={{position:"fixed",top:0,left:0,right:0,zIndex:50,background:T.surface,borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",height:52}}>
+            <div style={{fontFamily:T.serif,fontSize:22,fontWeight:900,color:T.amber}}>Readtor</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${T.amber},${T.amber2})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:T.bg}}>
+                {user?.name?.[0]?.toUpperCase()}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Mobile bottom nav ── */}
+        {mobile && (
+          <nav style={{position:"fixed",bottom:0,left:0,right:0,zIndex:50,background:T.surface,borderTop:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-around",height:60,paddingBottom:"env(safe-area-inset-bottom)"}}>
+            {NAV.slice(0,6).map(n=>{
+              const active=view===n.id;
+              return (
+                <button key={n.id} onClick={()=>setView(n.id)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"6px 4px",background:"none",border:"none",cursor:"pointer",color:active?T.amber:T.text3,minWidth:44,position:"relative"}}>
+                  <SVG d={ICONS[n.icon]} size={20} stroke={active?T.amber:T.text3}/>
+                  <span style={{fontSize:9,fontWeight:active?700:400,letterSpacing:.3}}>{n.label.split(" ")[0]}</span>
+                  {n.badge>0 && <span style={{position:"absolute",top:2,right:2,background:T.red,color:"#fff",fontSize:9,width:15,height:15,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{n.badge}</span>}
+                </button>
+              );
+            })}
+            <button onClick={logout} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"6px 4px",background:"none",border:"none",cursor:"pointer",color:T.text3,minWidth:44}}>
+              <SVG d={ICONS.logout} size={20} stroke={T.text3}/>
+              <span style={{fontSize:9,letterSpacing:.3}}>Logout</span>
+            </button>
+          </nav>
+        )}
+      </>)}
+
+      <main style={{flex:1,marginLeft:(!mobile && !["reading","quiz","results"].includes(view))?220:0,minHeight:"100vh",overflow:"auto",paddingTop:mobile&&!["reading","quiz","results"].includes(view)?52:0,paddingBottom:mobile&&!["reading","quiz","results"].includes(view)?60:0}}>
         {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz} darkMode={darkMode} toggleTheme={toggleTheme}/>}
@@ -958,6 +1026,7 @@ export default function App() {
         {view==="quiz"       && quizSession   && <QuizView     passage={quizSession.passage} sessionData={quizSession.sessionData} onSubmit={submitQuiz} onExit={()=>setView("dashboard")} dynamicQuestions={pendingQuiz}/>}
         {view==="results"    && lastResults   && <ResultsView  results={lastResults} onDone={()=>setView("dashboard")} onFlashcards={()=>setView("flashcards")}/>}
         {view==="readingtips" && <ReadingTipsView darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="books"       && <BooksView onStart={startReading} darkMode={darkMode} toggleTheme={toggleTheme}/>}
       </main>
 
       {toast && (
@@ -1044,7 +1113,7 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
           <input style={inp} placeholder="Email address" type="email" value={email} onChange={e=>setEmail(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
           <input style={inp} placeholder="Password (min 6 characters)" type="password" value={pass} onChange={e=>setPass(e.target.value)} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2} onKeyDown={e=>{if(e.key==="Enter")submit();}}/>
           <Btn onClick={submit} disabled={loading} size="lg" style={{width:"100%",justifyContent:"center",marginTop:4}}>
-            {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> Please wait…</>:mode==="login"?"Sign In →":"Create Account →"}
+            {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> {mode==="login"?"Signing in…":"Creating account…"}</>:mode==="login"?"Sign In →":"Create Account →"}
           </Btn>
         </div>
 
@@ -1070,17 +1139,17 @@ function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
 // ── Reusable theme toggle button (top-right of every content page) ──────────
 function ThemeToggleBtn({ darkMode, toggleTheme }) {
   const T = useTheme();
-    return (
+  return (
     <button onClick={toggleTheme}
       title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-      style={{position:"fixed",top:16,right:20,zIndex:200,display:"flex",alignItems:"center",gap:7,
-        padding:"7px 14px",borderRadius:20,border:`1px solid ${T.border2}`,
-        background:T.card,color:T.text2,cursor:"pointer",fontSize:12,fontWeight:500,
-        boxShadow:"0 2px 12px rgba(0,0,0,0.25)",transition:"all 0.2s"}}
+      style={{position:"fixed",top:12,right:16,zIndex:200,
+        width:36,height:36,borderRadius:"50%",
+        display:"flex",alignItems:"center",justifyContent:"center",
+        border:`1px solid ${T.border2}`,background:T.card,color:T.text2,
+        cursor:"pointer",boxShadow:"0 2px 12px rgba(0,0,0,0.25)",transition:"all 0.2s"}}
       onMouseEnter={e=>{e.currentTarget.style.borderColor=T.amber;e.currentTarget.style.color=T.amber;}}
       onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border2;e.currentTarget.style.color=T.text2;}}>
-      <SVG d={darkMode ? ICONS.sun : ICONS.moon} size={14} stroke="currentColor"/>
-      {darkMode ? "Light" : "Dark"}
+      <SVG d={darkMode ? ICONS.sun : ICONS.moon} size={16} stroke="currentColor"/>
     </button>
   );
 }
@@ -1105,7 +1174,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
   ];
 
   return (
-    <div style={{padding:"40px 48px",maxWidth:1200}}>
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:1200}}>
       <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:40,animation:"fadeUp 0.4s ease both"}}>
         <div>
@@ -1119,7 +1188,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
         </div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:16,marginBottom:40}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:16,marginBottom:40}}>
         {[
           {label:"Reading Level",  value:level.title,              sub:`Level ${user?.level} of 10`,  color:T.amber,   icon:"⚡"},
           {label:"Current Streak", value:`${user?.streak||0}`,     sub:"consecutive days",            color:"#ff7043", icon:"🔥"},
@@ -1152,7 +1221,7 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
         <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:11,color:T.text3}}><span>Novice</span><span>Legendary</span></div>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:24,animation:"fadeUp 0.4s 0.25s ease both"}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:24,animation:"fadeUp 0.4s 0.25s ease both"}}>
         <div>
           <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:16}}>Recommended For You</div>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -1282,7 +1351,7 @@ function LibraryView({ onStart, aiPassages, myAIPassages, userId, onPublish, onD
   ];
 
   return (
-    <div style={{padding:"40px 48px"}}>
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)"}}>
       <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
         <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Library</h1>
@@ -1875,7 +1944,7 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
   );
 
   return (
-    <div style={{padding:"40px 48px",maxWidth:800}}>
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:800}}>
       <div style={{marginBottom:40,animation:"fadeUp 0.4s ease both"}}>
         <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>AI Generate</h1>
@@ -2013,7 +2082,7 @@ function UploadView({ onStart, notify, uploads, isGuest, userId, onSave, onDelet
   const inp = {width:"100%",padding:"12px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.surface,color:T.text,fontSize:15,outline:"none",transition:"border-color 0.2s"};
 
   return (
-    <div style={{padding:"40px 48px",maxWidth:960}}>
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:960}}>
       <div style={{marginBottom:32,animation:"fadeUp 0.4s ease both"}}>
         <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Upload Text</h1>
@@ -2215,7 +2284,7 @@ function ReadingTipsView({ darkMode, toggleTheme }) {
   const category = TIPS[activeCategory];
 
   return (
-    <div style={{padding:"40px 48px",maxWidth:1100}}>
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:1100}}>
       <div style={{marginBottom:36,animation:"fadeUp 0.4s ease both"}}>
         <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
       <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Reading Tips</h1>
@@ -2249,6 +2318,199 @@ function ReadingTipsView({ darkMode, toggleTheme }) {
         <div style={{fontFamily:T.serif,fontSize:14,fontStyle:"italic",color:T.text2,lineHeight:1.7}}>
           "The more that you read, the more things you will know. The more that you learn, the more places you'll go." — Dr. Seuss. Practice these techniques consistently with Readtor's reading modes and track your WPM progress over time.
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPLASH SCREEN — shown while checking session on load / after login
+// ─────────────────────────────────────────────────────────────────────────────
+function SplashScreen() {
+  const T = useTheme();
+  return (
+    <div style={{minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20}}>
+      <div style={{fontFamily:T.serif,fontSize:48,fontWeight:900,color:T.amber,letterSpacing:-2,animation:"fadeUp 0.5s ease both"}}>
+        Read<span style={{color:T.text}}>tor</span>
+      </div>
+      <div style={{fontSize:14,color:T.text3,animation:"fadeUp 0.5s 0.1s ease both"}}>Welcome to Readtor</div>
+      <div style={{display:"flex",gap:6,marginTop:8,animation:"fadeUp 0.5s 0.2s ease both"}}>
+        {[0,1,2].map(i=>(
+          <div key={i} style={{width:8,height:8,borderRadius:"50%",background:T.amber,animation:`pulse 1.2s ${i*0.2}s ease-in-out infinite`}}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOKS VIEW — Project Gutenberg open-source library via Gutendex API
+// ─────────────────────────────────────────────────────────────────────────────
+function BooksView({ onStart, darkMode, toggleTheme }) {
+  const T = useTheme();
+  const [books,    setBooks]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [search,   setSearch]   = useState("");
+  const [query,    setQuery]    = useState("");
+  const [page,     setPage]     = useState(1);
+  const [hasNext,  setHasNext]  = useState(false);
+  const [reading,  setReading]  = useState(null); // book being loaded
+  const [error,    setError]    = useState("");
+
+  const fetchBooks = async (q, p) => {
+    setLoading(true); setError("");
+    try {
+      const topic = q ? `search=${encodeURIComponent(q)}&` : "";
+      const res = await fetch(`https://gutendex.com/books/?${topic}page=${p}&languages=en`);
+      const data = await res.json();
+      setBooks(data.results || []);
+      setHasNext(!!data.next);
+    } catch(e) {
+      setError("Couldn't load books — check your connection.");
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchBooks("", 1); }, []);
+
+  const handleSearch = () => {
+    setPage(1);
+    setQuery(search);
+    fetchBooks(search, 1);
+  };
+
+  const loadBook = async (book) => {
+    // Find the best text format
+    const formats = book.formats || {};
+    const textUrl =
+      formats["text/plain; charset=utf-8"] ||
+      formats["text/plain; charset=us-ascii"] ||
+      formats["text/plain"] ||
+      Object.keys(formats).find(k => k.startsWith("text/plain") && formats[k]);
+    if (!textUrl) {
+      alert("No plain text version available for this book.");
+      return;
+    }
+    setReading(book.id);
+    try {
+      const res = await fetch(textUrl);
+      const raw  = await res.text();
+      // Trim Gutenberg header/footer boilerplate
+      const startMarker = raw.search(/\*\*\* START OF (THIS|THE) PROJECT GUTENBERG/i);
+      const endMarker   = raw.search(/\*\*\* END OF (THIS|THE) PROJECT GUTENBERG/i);
+      const clean = startMarker > -1
+        ? raw.slice(startMarker, endMarker > -1 ? endMarker : undefined)
+            .replace(/\*{3}.*?\*{3}/s, "").trim()
+        : raw.trim();
+      // Limit to first 5000 words for the reading session
+      const words = clean.split(/\s+/);
+      const excerpt = words.slice(0, 5000).join(" ");
+      const passage = {
+        id:        `gutenberg-${book.id}`,
+        title:     book.title,
+        genre:     "Classic Literature",
+        level:     6,
+        wordCount: words.slice(0, 5000).length,
+        text:      excerpt,
+        tags:      ["book", "gutenberg", "open-source"],
+        author:    (book.authors[0]?.name || "Unknown"),
+      };
+      onStart(passage);
+    } catch(e) {
+      alert("Couldn't load this book. It may not be available in plain text.");
+    }
+    setReading(null);
+  };
+
+  return (
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:1100}}>
+      <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+
+      <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
+        <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Open-Source Books</h1>
+        <p style={{color:T.text3,fontSize:15}}>70,000+ free books from Project Gutenberg — read any passage in Readtor's reading modes.</p>
+      </div>
+
+      {/* Search */}
+      <div style={{display:"flex",gap:10,marginBottom:28,animation:"fadeUp 0.4s 0.05s ease both",flexWrap:"wrap"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&handleSearch()}
+          placeholder="Search by title or author…"
+          style={{flex:1,minWidth:200,padding:"11px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.card,color:T.text,fontSize:14,outline:"none"}}
+          onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
+        <Btn onClick={handleSearch}>Search</Btn>
+        {query && <Btn variant="ghost" onClick={()=>{setSearch("");setQuery("");setPage(1);fetchBooks("",1);}}>Clear</Btn>}
+      </div>
+
+      {/* Error */}
+      {error && <div style={{padding:"14px 18px",background:`${T.red}11`,border:`1px solid ${T.red}33`,borderRadius:10,marginBottom:20,color:T.red,fontSize:14}}>{error}</div>}
+
+      {/* Loading */}
+      {loading && (
+        <div style={{display:"flex",justifyContent:"center",padding:"60px 0",color:T.text3,flexDirection:"column",alignItems:"center",gap:12}}>
+          <span style={{fontSize:28,animation:"spin 1.2s linear infinite",display:"inline-block"}}>✦</span>
+          <span style={{fontSize:14}}>Loading books…</span>
+        </div>
+      )}
+
+      {/* Books grid */}
+      {!loading && (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16,animation:"fadeUp 0.4s ease both"}}>
+          {books.map((book,i) => {
+            const author  = book.authors[0]?.name || "Unknown Author";
+            const cover   = book.formats?.["image/jpeg"];
+            const hasText = Object.keys(book.formats||{}).some(k=>k.startsWith("text/plain"));
+            return (
+              <div key={book.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column",animation:`fadeUp 0.3s ${i*0.03}s ease both`,transition:"border-color 0.15s"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"44"}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
+                {/* Cover */}
+                <div style={{height:160,background:T.surface,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",flexShrink:0}}>
+                  {cover
+                    ? <img src={cover} alt={book.title} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.style.display="none";}}/>
+                    : <div style={{textAlign:"center",padding:16}}>
+                        <div style={{fontSize:32,marginBottom:6}}>📖</div>
+                        <div style={{fontSize:11,color:T.text3}}>No cover</div>
+                      </div>
+                  }
+                </div>
+                {/* Info */}
+                <div style={{padding:"14px 16px",flex:1,display:"flex",flexDirection:"column",gap:8}}>
+                  <div style={{fontFamily:T.serif,fontSize:15,fontWeight:700,color:T.text,lineHeight:1.3}}>{book.title.slice(0,60)}{book.title.length>60?"…":""}</div>
+                  <div style={{fontSize:12,color:T.text3}}>{author}</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
+                    <Tag label={`⬇ ${book.download_count?.toLocaleString()||"0"}`} color="amber"/>
+                    {book.subjects?.slice(0,1).map(s=><Tag key={s} label={s.slice(0,25)}/>)}
+                  </div>
+                  <div style={{marginTop:"auto",paddingTop:10}}>
+                    {hasText
+                      ? <Btn size="sm" onClick={()=>loadBook(book)} disabled={reading===book.id} style={{width:"100%",justifyContent:"center"}}>
+                          {reading===book.id
+                            ? <><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> Loading…</>
+                            : <>Read in Readtor <SVG d={ICONS.arrow} size={13} stroke={T.bg}/></>
+                          }
+                        </Btn>
+                      : <div style={{fontSize:12,color:T.text3,textAlign:"center",padding:"6px 0"}}>Text not available</div>
+                    }
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {!loading && books.length > 0 && (
+        <div style={{display:"flex",justifyContent:"center",gap:12,marginTop:32,animation:"fadeUp 0.3s ease both"}}>
+          <Btn variant="secondary" disabled={page===1} onClick={()=>{const p=page-1;setPage(p);fetchBooks(query,p);}}>← Previous</Btn>
+          <span style={{display:"flex",alignItems:"center",fontSize:13,color:T.text3}}>Page {page}</span>
+          <Btn variant="secondary" disabled={!hasNext} onClick={()=>{const p=page+1;setPage(p);fetchBooks(query,p);}}>Next →</Btn>
+        </div>
+      )}
+
+      <div style={{marginTop:28,padding:"12px 16px",background:T.amberGlow,border:`1px solid ${T.amber}33`,borderRadius:10,fontSize:12,color:T.text3}}>
+        📚 Books provided by <strong style={{color:T.amber}}>Project Gutenberg</strong> — public domain works whose copyright has expired. First 5,000 words loaded per session.
       </div>
     </div>
   );
