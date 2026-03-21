@@ -2380,44 +2380,59 @@ function BooksView({ onStart, darkMode, toggleTheme }) {
   };
 
   const loadBook = async (book) => {
-    // Find the best text format
-    const formats = book.formats || {};
-    const textUrl =
-      formats["text/plain; charset=utf-8"] ||
-      formats["text/plain; charset=us-ascii"] ||
-      formats["text/plain"] ||
-      Object.keys(formats).find(k => k.startsWith("text/plain") && formats[k]);
-    if (!textUrl) {
-      alert("No plain text version available for this book.");
+    setReading(book.id);
+    // Build candidate URLs in order of reliability.
+    // Gutenberg's formats API returns URLs that redirect (302) and fail CORS.
+    // The cache/epub mirror serves files directly with proper CORS headers.
+    const id = book.id;
+    const candidates = [
+      // Mirror CDN — direct, no redirects, CORS-friendly
+      `https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`,
+      `https://www.gutenberg.org/cache/epub/${id}/pg${id}-0.txt`,
+      // Some books only have the older .txt path on the files server
+      `https://gutenberg.org/files/${id}/${id}-0.txt`,
+      `https://gutenberg.org/files/${id}/${id}.txt`,
+    ];
+
+    let raw = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) { raw = await res.text(); break; }
+      } catch(e) { /* try next */ }
+    }
+
+    if (!raw || raw.length < 500) {
+      setReading(null);
+      alert("Couldn't load this book — it may not be available as plain text on Gutenberg's servers.");
       return;
     }
-    setReading(book.id);
+
     try {
-      const res = await fetch(textUrl);
-      const raw  = await res.text();
-      // Trim Gutenberg header/footer boilerplate
+      // Strip Project Gutenberg header/footer boilerplate
       const startMarker = raw.search(/\*\*\* START OF (THIS|THE) PROJECT GUTENBERG/i);
       const endMarker   = raw.search(/\*\*\* END OF (THIS|THE) PROJECT GUTENBERG/i);
       const clean = startMarker > -1
         ? raw.slice(startMarker, endMarker > -1 ? endMarker : undefined)
-            .replace(/\*{3}.*?\*{3}/s, "").trim()
+            .replace(/\*{3}[^*]+\*{3}/g, "").trim()
         : raw.trim();
-      // Limit to first 5000 words for the reading session
-      const words = clean.split(/\s+/);
+
+      // Limit to first 5000 words
+      const words  = clean.split(/\s+/).filter(Boolean);
       const excerpt = words.slice(0, 5000).join(" ");
       const passage = {
-        id:        `gutenberg-${book.id}`,
+        id:        `gutenberg-${id}`,
         title:     book.title,
         genre:     "Classic Literature",
         level:     6,
-        wordCount: words.slice(0, 5000).length,
+        wordCount: Math.min(words.length, 5000),
         text:      excerpt,
         tags:      ["book", "gutenberg", "open-source"],
         author:    (book.authors[0]?.name || "Unknown"),
       };
       onStart(passage);
     } catch(e) {
-      alert("Couldn't load this book. It may not be available in plain text.");
+      alert("Book loaded but couldn't be parsed. Please try another.");
     }
     setReading(null);
   };
