@@ -2385,26 +2385,41 @@ function BooksView({ onStart, darkMode, toggleTheme }) {
     // Gutenberg's formats API returns URLs that redirect (302) and fail CORS.
     // The cache/epub mirror serves files directly with proper CORS headers.
     const id = book.id;
-    // Gutenberg's servers block CORS — route through corsproxy.io which adds
-    // the Access-Control-Allow-Origin header. Try the cache/epub mirror first
-    // (most reliable), then the files server as fallback.
-    const proxy = "https://corsproxy.io/?";
-    const directUrls = [
+    // Gutenberg blocks direct browser CORS requests. We try multiple proxies
+    // and multiple file paths until one succeeds.
+    const gutenbergUrls = [
       `https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`,
       `https://www.gutenberg.org/cache/epub/${id}/pg${id}-0.txt`,
       `https://www.gutenberg.org/files/${id}/${id}-0.txt`,
       `https://www.gutenberg.org/files/${id}/${id}.txt`,
     ];
 
+    // Each proxy wraps the URL differently
+    const makeProxied = (gutUrl) => [
+      // allorigins — returns JSON with contents field
+      { url: `https://api.allorigins.win/get?url=${encodeURIComponent(gutUrl)}`, json: true  },
+      // corsproxy.io
+      { url: `https://corsproxy.io/?${encodeURIComponent(gutUrl)}`,             json: false },
+      // thingproxy
+      { url: `https://thingproxy.freeboard.io/fetch/${gutUrl}`,                 json: false },
+    ];
+
     let raw = null;
-    for (const url of directUrls) {
-      try {
-        const res = await fetch(proxy + encodeURIComponent(url));
-        if (res.ok) {
-          const text = await res.text();
-          if (text && text.length > 500) { raw = text; break; }
-        }
-      } catch(e) { /* try next */ }
+    outer: for (const gutUrl of gutenbergUrls) {
+      for (const { url, json } of makeProxied(gutUrl)) {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) continue;
+          let text;
+          if (json) {
+            const data = await res.json();
+            text = data.contents;
+          } else {
+            text = await res.text();
+          }
+          if (text && text.length > 500) { raw = text; break outer; }
+        } catch(e) { /* try next proxy */ }
+      }
     }
 
     if (!raw || raw.length < 500) {
