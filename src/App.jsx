@@ -2385,20 +2385,25 @@ function BooksView({ onStart, darkMode, toggleTheme }) {
     // Gutenberg's formats API returns URLs that redirect (302) and fail CORS.
     // The cache/epub mirror serves files directly with proper CORS headers.
     const id = book.id;
-    const candidates = [
-      // Mirror CDN — direct, no redirects, CORS-friendly
+    // Gutenberg's servers block CORS — route through corsproxy.io which adds
+    // the Access-Control-Allow-Origin header. Try the cache/epub mirror first
+    // (most reliable), then the files server as fallback.
+    const proxy = "https://corsproxy.io/?";
+    const directUrls = [
       `https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`,
       `https://www.gutenberg.org/cache/epub/${id}/pg${id}-0.txt`,
-      // Some books only have the older .txt path on the files server
-      `https://gutenberg.org/files/${id}/${id}-0.txt`,
-      `https://gutenberg.org/files/${id}/${id}.txt`,
+      `https://www.gutenberg.org/files/${id}/${id}-0.txt`,
+      `https://www.gutenberg.org/files/${id}/${id}.txt`,
     ];
 
     let raw = null;
-    for (const url of candidates) {
+    for (const url of directUrls) {
       try {
-        const res = await fetch(url);
-        if (res.ok) { raw = await res.text(); break; }
+        const res = await fetch(proxy + encodeURIComponent(url));
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.length > 500) { raw = text; break; }
+        }
       } catch(e) { /* try next */ }
     }
 
