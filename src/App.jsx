@@ -2346,7 +2346,7 @@ function SplashScreen() {
 // ─────────────────────────────────────────────────────────────────────────────
 // BOOKS VIEW — Project Gutenberg open-source library via Gutendex API
 // ─────────────────────────────────────────────────────────────────────────────
-function BooksView({ onStart, darkMode, toggleTheme }) {
+function BooksView({ darkMode, toggleTheme }) {
   const T = useTheme();
   const [books,    setBooks]    = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -2354,53 +2354,37 @@ function BooksView({ onStart, darkMode, toggleTheme }) {
   const [query,    setQuery]    = useState("");
   const [page,     setPage]     = useState(1);
   const [hasNext,  setHasNext]  = useState(false);
-  const [reading,  setReading]  = useState(null); // book being loaded
+  const [fetching, setFetching] = useState(null);
+  const [bookText, setBookText] = useState(null); // { title, author, text }
   const [error,    setError]    = useState("");
 
   const fetchBooks = async (q, p) => {
     setLoading(true); setError("");
     try {
       const topic = q ? `search=${encodeURIComponent(q)}&` : "";
-      const res = await fetch(`https://gutendex.com/books/?${topic}page=${p}&languages=en`);
-      const data = await res.json();
+      const res   = await fetch(`https://gutendex.com/books/?${topic}page=${p}&languages=en`);
+      const data  = await res.json();
       setBooks(data.results || []);
       setHasNext(!!data.next);
-    } catch(e) {
-      setError("Couldn't load books — check your connection.");
-    }
+    } catch(e) { setError("Couldn't load books — check your connection."); }
     setLoading(false);
   };
 
   useEffect(() => { fetchBooks("", 1); }, []);
-
-  const handleSearch = () => {
-    setPage(1);
-    setQuery(search);
-    fetchBooks(search, 1);
-  };
+  const handleSearch = () => { setPage(1); setQuery(search); fetchBooks(search, 1); };
 
   const loadBook = async (book) => {
-    setReading(book.id);
-    // Build candidate URLs in order of reliability.
-    // Gutenberg's formats API returns URLs that redirect (302) and fail CORS.
-    // The cache/epub mirror serves files directly with proper CORS headers.
+    setFetching(book.id); setError("");
     const id = book.id;
-    // Gutenberg blocks direct browser CORS requests. We try multiple proxies
-    // and multiple file paths until one succeeds.
     const gutenbergUrls = [
       `https://www.gutenberg.org/cache/epub/${id}/pg${id}.txt`,
       `https://www.gutenberg.org/cache/epub/${id}/pg${id}-0.txt`,
       `https://www.gutenberg.org/files/${id}/${id}-0.txt`,
       `https://www.gutenberg.org/files/${id}/${id}.txt`,
     ];
-
-    // Each proxy wraps the URL differently
     const makeProxied = (gutUrl) => [
-      // allorigins — returns JSON with contents field
       { url: `https://api.allorigins.win/get?url=${encodeURIComponent(gutUrl)}`, json: true  },
-      // corsproxy.io
       { url: `https://corsproxy.io/?${encodeURIComponent(gutUrl)}`,             json: false },
-      // thingproxy
       { url: `https://thingproxy.freeboard.io/fetch/${gutUrl}`,                 json: false },
     ];
 
@@ -2410,142 +2394,190 @@ function BooksView({ onStart, darkMode, toggleTheme }) {
         try {
           const res = await fetch(url);
           if (!res.ok) continue;
-          let text;
-          if (json) {
-            const data = await res.json();
-            text = data.contents;
-          } else {
-            text = await res.text();
-          }
+          const text = json ? (await res.json()).contents : await res.text();
           if (text && text.length > 500) { raw = text; break outer; }
-        } catch(e) { /* try next proxy */ }
+        } catch(e) { /* try next */ }
       }
     }
 
+    setFetching(null);
     if (!raw || raw.length < 500) {
-      setReading(null);
-      alert("Couldn't load this book — it may not be available as plain text on Gutenberg's servers.");
+      setError(`Couldn't load "${book.title}" — try another book.`);
       return;
     }
 
-    try {
-      // Strip Project Gutenberg header/footer boilerplate
-      const startMarker = raw.search(/\*\*\* START OF (THIS|THE) PROJECT GUTENBERG/i);
-      const endMarker   = raw.search(/\*\*\* END OF (THIS|THE) PROJECT GUTENBERG/i);
-      const clean = startMarker > -1
-        ? raw.slice(startMarker, endMarker > -1 ? endMarker : undefined)
-            .replace(/\*{3}[^*]+\*{3}/g, "").trim()
-        : raw.trim();
+    // Strip Gutenberg header/footer
+    const s = raw.search(/\*{3} START OF (THIS|THE) PROJECT GUTENBERG/i);
+    const e = raw.search(/\*{3} END OF (THIS|THE) PROJECT GUTENBERG/i);
+    const clean = s > -1 ? raw.slice(s, e > -1 ? e : undefined).replace(/\*{3}[^*]+\*{3}/g,"").trim() : raw.trim();
 
-      // Limit to first 5000 words
-      const words  = clean.split(/\s+/).filter(Boolean);
-      const excerpt = words.slice(0, 5000).join(" ");
-      const passage = {
-        id:        `gutenberg-${id}`,
-        title:     book.title,
-        genre:     "Classic Literature",
-        level:     6,
-        wordCount: Math.min(words.length, 5000),
-        text:      excerpt,
-        tags:      ["book", "gutenberg", "open-source"],
-        author:    (book.authors[0]?.name || "Unknown"),
-      };
-      onStart(passage);
-    } catch(e) {
-      alert("Book loaded but couldn't be parsed. Please try another.");
-    }
-    setReading(null);
+    setBookText({ title: book.title, author: book.authors[0]?.name || "Unknown", text: clean });
   };
 
+  // ── Book reader view ────────────────────────────────────────────────────────
+  if (bookText) {
+    return <BookReader title={bookText.title} author={bookText.author} text={bookText.text}
+      darkMode={darkMode} toggleTheme={toggleTheme} onClose={()=>setBookText(null)}/>;
+  }
+
+  // ── Book list view ──────────────────────────────────────────────────────────
   return (
     <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:1100}}>
       <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
-
       <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
         <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Open-Source Books</h1>
-        <p style={{color:T.text3,fontSize:15}}>70,000+ free books from Project Gutenberg — read any passage in Readtor's reading modes.</p>
+        <p style={{color:T.text3,fontSize:15}}>70,000+ free books from Project Gutenberg. Click any book to read it here.</p>
       </div>
-
-      {/* Search */}
-      <div style={{display:"flex",gap:10,marginBottom:28,animation:"fadeUp 0.4s 0.05s ease both",flexWrap:"wrap"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&handleSearch()}
+      <div style={{display:"flex",gap:10,marginBottom:28,flexWrap:"wrap"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleSearch()}
           placeholder="Search by title or author…"
           style={{flex:1,minWidth:200,padding:"11px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.card,color:T.text,fontSize:14,outline:"none"}}
           onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
         <Btn onClick={handleSearch}>Search</Btn>
         {query && <Btn variant="ghost" onClick={()=>{setSearch("");setQuery("");setPage(1);fetchBooks("",1);}}>Clear</Btn>}
       </div>
-
-      {/* Error */}
-      {error && <div style={{padding:"14px 18px",background:`${T.red}11`,border:`1px solid ${T.red}33`,borderRadius:10,marginBottom:20,color:T.red,fontSize:14}}>{error}</div>}
-
-      {/* Loading */}
-      {loading && (
-        <div style={{display:"flex",justifyContent:"center",padding:"60px 0",color:T.text3,flexDirection:"column",alignItems:"center",gap:12}}>
-          <span style={{fontSize:28,animation:"spin 1.2s linear infinite",display:"inline-block"}}>✦</span>
-          <span style={{fontSize:14}}>Loading books…</span>
+      {error && (
+        <div style={{padding:"14px 18px",background:`${T.red}11`,border:`1px solid ${T.red}33`,borderRadius:10,marginBottom:20,color:T.red,fontSize:14,display:"flex",justifyContent:"space-between"}}>
+          {error}<button onClick={()=>setError("")} style={{background:"none",border:"none",cursor:"pointer",color:T.red,fontSize:18}}>×</button>
         </div>
       )}
-
-      {/* Books grid */}
-      {!loading && (
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:16,animation:"fadeUp 0.4s ease both"}}>
+      {loading ? (
+        <div style={{display:"flex",justifyContent:"center",padding:"60px 0",flexDirection:"column",alignItems:"center",gap:12}}>
+          <span style={{fontSize:28,animation:"spin 1.2s linear infinite",display:"inline-block"}}>✦</span>
+          <span style={{fontSize:14,color:T.text3}}>Loading books…</span>
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:16,animation:"fadeUp 0.4s ease both"}}>
           {books.map((book,i) => {
             const author  = book.authors[0]?.name || "Unknown Author";
             const cover   = book.formats?.["image/jpeg"];
             const hasText = Object.keys(book.formats||{}).some(k=>k.startsWith("text/plain"));
             return (
-              <div key={book.id} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden",display:"flex",flexDirection:"column",animation:`fadeUp 0.3s ${i*0.03}s ease both`,transition:"border-color 0.15s"}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=T.amber+"44"}
+              <div key={book.id}
+                style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden",
+                  display:"flex",flexDirection:"column",animation:`fadeUp 0.3s ${i*0.03}s ease both`,
+                  transition:"all 0.15s",cursor:hasText?"pointer":"default",opacity:hasText?1:0.5}}
+                onClick={()=>hasText&&!fetching&&loadBook(book)}
+                onMouseEnter={e=>{if(hasText)e.currentTarget.style.borderColor=T.amber+"88";}}
                 onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-                {/* Cover */}
-                <div style={{height:160,background:T.surface,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",flexShrink:0}}>
+                <div style={{height:180,background:T.surface,display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",position:"relative",flexShrink:0}}>
                   {cover
-                    ? <img src={cover} alt={book.title} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>{e.target.style.display="none";}}/>
-                    : <div style={{textAlign:"center",padding:16}}>
-                        <div style={{fontSize:32,marginBottom:6}}>📖</div>
-                        <div style={{fontSize:11,color:T.text3}}>No cover</div>
-                      </div>
+                    ? <img src={cover} alt={book.title} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                    : <div style={{textAlign:"center"}}><div style={{fontSize:36}}>📖</div><div style={{fontSize:10,color:T.text3,marginTop:4}}>No cover</div></div>
                   }
+                  {fetching===book.id && (
+                    <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.65)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8}}>
+                      <span style={{fontSize:22,animation:"spin 1s linear infinite",display:"inline-block",color:T.amber}}>✦</span>
+                      <span style={{fontSize:11,color:"#fff"}}>Loading…</span>
+                    </div>
+                  )}
                 </div>
-                {/* Info */}
-                <div style={{padding:"14px 16px",flex:1,display:"flex",flexDirection:"column",gap:8}}>
-                  <div style={{fontFamily:T.serif,fontSize:15,fontWeight:700,color:T.text,lineHeight:1.3}}>{book.title.slice(0,60)}{book.title.length>60?"…":""}</div>
-                  <div style={{fontSize:12,color:T.text3}}>{author}</div>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:2}}>
-                    <Tag label={`⬇ ${book.download_count?.toLocaleString()||"0"}`} color="amber"/>
-                    {book.subjects?.slice(0,1).map(s=><Tag key={s} label={s.slice(0,25)}/>)}
+                <div style={{padding:"12px 14px",flex:1,display:"flex",flexDirection:"column",gap:5}}>
+                  <div style={{fontFamily:T.serif,fontSize:13,fontWeight:700,color:T.text,lineHeight:1.3}}>
+                    {book.title.length>50?book.title.slice(0,50)+"…":book.title}
                   </div>
-                  <div style={{marginTop:"auto",paddingTop:10}}>
-                    {hasText
-                      ? <Btn size="sm" onClick={()=>loadBook(book)} disabled={reading===book.id} style={{width:"100%",justifyContent:"center"}}>
-                          {reading===book.id
-                            ? <><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> Loading…</>
-                            : <>Read in Readtor <SVG d={ICONS.arrow} size={13} stroke={T.bg}/></>
-                          }
-                        </Btn>
-                      : <div style={{fontSize:12,color:T.text3,textAlign:"center",padding:"6px 0"}}>Text not available</div>
-                    }
+                  <div style={{fontSize:11,color:T.text3}}>{author.length>35?author.slice(0,35)+"…":author}</div>
+                  <div style={{display:"flex",gap:5,marginTop:4,flexWrap:"wrap"}}>
+                    <Tag label={`⬇ ${(book.download_count||0).toLocaleString()}`} color="amber"/>
                   </div>
+                  {hasText
+                    ? <div style={{marginTop:"auto",paddingTop:8,fontSize:11,color:T.teal,display:"flex",alignItems:"center",gap:4}}>
+                        <SVG d={ICONS.book} size={11} stroke={T.teal}/> Click to read
+                      </div>
+                    : <div style={{marginTop:"auto",paddingTop:8,fontSize:11,color:T.text3}}>Text unavailable</div>
+                  }
                 </div>
               </div>
             );
           })}
         </div>
       )}
-
-      {/* Pagination */}
       {!loading && books.length > 0 && (
-        <div style={{display:"flex",justifyContent:"center",gap:12,marginTop:32,animation:"fadeUp 0.3s ease both"}}>
-          <Btn variant="secondary" disabled={page===1} onClick={()=>{const p=page-1;setPage(p);fetchBooks(query,p);}}>← Previous</Btn>
-          <span style={{display:"flex",alignItems:"center",fontSize:13,color:T.text3}}>Page {page}</span>
-          <Btn variant="secondary" disabled={!hasNext} onClick={()=>{const p=page+1;setPage(p);fetchBooks(query,p);}}>Next →</Btn>
+        <div style={{display:"flex",justifyContent:"center",gap:12,marginTop:32,flexWrap:"wrap"}}>
+          <Btn variant="secondary" disabled={page===1||!!fetching} onClick={()=>{const p=page-1;setPage(p);fetchBooks(query,p);}}>← Previous</Btn>
+          <span style={{display:"flex",alignItems:"center",fontSize:13,color:T.text3,padding:"0 8px"}}>Page {page}</span>
+          <Btn variant="secondary" disabled={!hasNext||!!fetching} onClick={()=>{const p=page+1;setPage(p);fetchBooks(query,p);}}>Next →</Btn>
         </div>
       )}
-
       <div style={{marginTop:28,padding:"12px 16px",background:T.amberGlow,border:`1px solid ${T.amber}33`,borderRadius:10,fontSize:12,color:T.text3}}>
-        📚 Books provided by <strong style={{color:T.amber}}>Project Gutenberg</strong> — public domain works whose copyright has expired. First 5,000 words loaded per session.
+        📚 Books by <strong style={{color:T.amber}}>Project Gutenberg</strong> — public domain, free to read.
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOK READER — pure reading, no quiz / WPM / timer
+// ─────────────────────────────────────────────────────────────────────────────
+function BookReader({ title, author, text, darkMode, toggleTheme, onClose }) {
+  const T = useTheme();
+  const [fontSize, setFontSize] = useState(17);
+  const [pos,      setPos]      = useState(0);
+  const CHUNK      = 3000;
+  const totalPages = Math.ceil(text.length / CHUNK);
+  const currentPage = Math.floor(pos / CHUNK) + 1;
+  const pageText   = text.slice(pos, pos + CHUNK);
+
+  const goNext = () => { if(pos+CHUNK<text.length){ setPos(p=>p+CHUNK); window.scrollTo(0,0); } };
+  const goPrev = () => { if(pos>0){ setPos(p=>Math.max(0,p-CHUNK)); window.scrollTo(0,0); } };
+
+  return (
+    <div style={{minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column"}}>
+      {/* Sticky header */}
+      <div style={{padding:"12px 20px",borderBottom:`1px solid ${T.border}`,background:T.surface,
+        display:"flex",alignItems:"center",gap:16,position:"sticky",top:0,zIndex:10,flexShrink:0}}>
+        <button onClick={onClose}
+          style={{background:"none",border:"none",cursor:"pointer",color:T.text3,fontSize:13,
+            display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap",flexShrink:0}}
+          onMouseEnter={e=>e.currentTarget.style.color=T.amber}
+          onMouseLeave={e=>e.currentTarget.style.color=T.text3}>
+          ← Back
+        </button>
+        <div style={{flex:1,minWidth:0,textAlign:"center"}}>
+          <div style={{fontFamily:T.serif,fontSize:14,fontWeight:700,color:T.text,
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{title}</div>
+          <div style={{fontSize:11,color:T.text3}}>{author}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+          <button onClick={()=>setFontSize(f=>Math.max(13,f-1))}
+            style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:4,width:26,height:26,
+              cursor:"pointer",color:T.text2,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
+          <span style={{fontSize:11,color:T.text3,minWidth:26,textAlign:"center"}}>{fontSize}</span>
+          <button onClick={()=>setFontSize(f=>Math.min(26,f+1))}
+            style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:4,width:26,height:26,
+              cursor:"pointer",color:T.text2,fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+        </div>
+        <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{height:3,background:T.card,flexShrink:0}}>
+        <div style={{height:"100%",background:`linear-gradient(90deg,${T.amber},${T.amber2})`,
+          width:`${(currentPage/totalPages)*100}%`,transition:"width 0.3s"}}/>
+      </div>
+
+      {/* Book text */}
+      <div style={{flex:1,display:"flex",justifyContent:"center",padding:"36px 20px 24px"}}>
+        <div style={{maxWidth:680,width:"100%"}}>
+          {pageText.split(/\n{2,}/).filter(p=>p.trim()).map((para,i) => (
+            <p key={i} style={{fontFamily:T.serif,fontSize:fontSize,lineHeight:1.9,
+              color:T.text,marginBottom:"1.5em",textAlign:"justify"}}>
+              {para.replace(/\n/g," ").trim()}
+            </p>
+          ))}
+        </div>
+      </div>
+
+      {/* Sticky footer nav */}
+      <div style={{padding:"14px 20px",borderTop:`1px solid ${T.border}`,background:T.surface,
+        display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,
+        position:"sticky",bottom:0,flexShrink:0}}>
+        <Btn variant="secondary" disabled={pos===0} onClick={goPrev}>← Previous</Btn>
+        <span style={{fontSize:12,color:T.text3,textAlign:"center"}}>
+          Page {currentPage} of {totalPages}<br/>
+          <span style={{fontSize:10}}>{Math.round((currentPage/totalPages)*100)}% read</span>
+        </span>
+        <Btn disabled={pos+CHUNK>=text.length} onClick={goNext}>Next →</Btn>
       </div>
     </div>
   );
