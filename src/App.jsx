@@ -461,14 +461,64 @@ async function saveSession(userId, { passage, wpm, comp, wordsRead, timeSeconds 
 async function incrementProfile(userId) {
   const { data: profile } = await supabase
     .from("profiles")
-    .select("total_sessions, streak")
+    .select("total_sessions, streak, streak_shields, last_session_date")
     .eq("id", userId)
     .single();
   if (!profile) return;
+
+  const today     = new Date().toISOString().slice(0, 10);
+  const lastDate  = profile.last_session_date || "";
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  let newStreak  = profile.streak || 0;
+  let newShields = profile.streak_shields || 0;
+
+  if (lastDate === today) {
+    // Already read today — no streak change
+  } else if (lastDate === yesterday || lastDate === "") {
+    // Consecutive day — increment streak
+    newStreak += 1;
+    // Award a shield every 7 days
+    if (newStreak > 0 && newStreak % 7 === 0) newShields += 1;
+  } else {
+    // Missed a day — use shield if available, else reset
+    if (newShields > 0) {
+      newShields -= 1;
+      newStreak += 1; // shield preserved the streak
+    } else {
+      newStreak = 1; // reset
+    }
+  }
+
   await supabase.from("profiles").update({
-    total_sessions: (profile.total_sessions || 0) + 1,
-    streak:         (profile.streak || 0) + 1,
+    total_sessions:    (profile.total_sessions || 0) + 1,
+    streak:            newStreak,
+    streak_shields:    newShields,
+    last_session_date: today,
   }).eq("id", userId);
+
+  return { newStreak, newShields };
+}
+
+// Update user state after a session — includes shields
+async function refreshUserProfile(userId, setUser) {
+  const profile = await getProfile(userId);
+  setUser(prev => ({
+    ...prev,
+    totalSessions:  profile.total_sessions,
+    streak:         profile.streak,
+    streakShields:  profile.streak_shields || 0,
+    difficultyLock: profile.difficulty_locked || false,
+  }));
+}
+
+// Toggle difficulty lock in DB
+async function setDifficultyLock(userId, locked) {
+  const { error } = await supabase
+    .from("profiles")
+    .update({ difficulty_locked: locked })
+    .eq("id", userId);
+  if (error) throw error;
 }
 
 // ★ Saved uploads helpers
@@ -625,6 +675,12 @@ const ICONS = {
   sun:      ["M12 1v2","M12 21v2","M4.22 4.22l1.42 1.42","M18.36 18.36l1.42 1.42","M1 12h2","M21 12h2","M4.22 19.78l1.42-1.42","M18.36 5.64l1.42-1.42","M12 5a7 7 0 100 14A7 7 0 0012 5z"],
   volume:   ["M11 5L6 9H2v6h4l5 4V5z","M19.07 4.93a10 10 0 010 14.14","M15.54 8.46a5 5 0 010 7.07"],
   volumeOff:["M11 5L6 9H2v6h4l5 4V5z","M23 9l-6 6","M17 9l6 6"],
+  vault:    ["M5 2h14a2 2 0 012 2v16a2 2 0 01-2 2H5a2 2 0 01-2-2V4a2 2 0 012-2z","M12 11a2 2 0 100 4 2 2 0 000-4z","M12 8v3","M12 15v1"],
+  settings: ["M12 15a3 3 0 100-6 3 3 0 000 6z","M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"],
+  shield:   "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  lock:     ["M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2z","M7 11V7a5 5 0 0110 0v4"],
+  unlock:   ["M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2z","M7 11V7a5 5 0 019.9-1"],
+  search:   ["M11 17A6 6 0 1011 5a6 6 0 000 12z","M21 21l-4.35-4.35"],
 };
 
 const Btn = ({ children, onClick, variant="primary", disabled, style={}, size="md" }) => {
@@ -718,6 +774,8 @@ export default function App() {
             level: profile.level,
             streak: profile.streak,
             totalSessions: profile.total_sessions,
+            streakShields:  profile.streak_shields  || 0,
+            difficultyLock: profile.difficulty_locked || false,
           });
           const [past, savedUploads, aiP, myAIP] = await Promise.all([
             fetchSessions(session.user.id),
@@ -827,7 +885,13 @@ export default function App() {
           getProfile(user.id),
         ]);
         setSessions(past);
-        setUser(prev => ({ ...prev, totalSessions: profile.total_sessions, streak: profile.streak }));
+        setUser(prev => ({
+          ...prev,
+          totalSessions:  profile.total_sessions,
+          streak:         profile.streak,
+          streakShields:  profile.streak_shields  || 0,
+          difficultyLock: profile.difficulty_locked || false,
+        }));
       } catch(e) {
         console.error("Failed to save session:", e);
         notify("Session couldn't be saved — check your connection.", "err");
@@ -934,7 +998,9 @@ export default function App() {
     { id:"generate",     label:"AI Generate",   icon:"generate" },
     { id:"flashcards",   label:"Flashcards",    icon:"cards",   badge:dueCards },
     { id:"upload",       label:"Upload",        icon:"upload"   },
+    { id:"vault",        label:"My Vault",      icon:"vault"    },
     { id:"readingtips",  label:"Reading Tips",  icon:"tips"     },
+    { id:"settings",     label:"Settings",      icon:"settings" },
   ];
 
   return (
@@ -1017,13 +1083,15 @@ export default function App() {
       <main style={{flex:1,marginLeft:(!mobile && !["reading","quiz","results"].includes(view))?220:0,minHeight:"100vh",overflow:"auto",paddingTop:mobile&&!["reading","quiz","results"].includes(view)?52:0,paddingBottom:mobile&&!["reading","quiz","results"].includes(view)?60:0}}>
         {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme}/>}
-        {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz} darkMode={darkMode} toggleTheme={toggleTheme} difficultyLock={user?.difficultyLock}/>}
         {view==="flashcards" && <FlashcardsView flashcards={flashcards} setFlashcards={setFlashcards} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="upload"     && <UploadView     onStart={startReading} notify={notify} uploads={uploads} isGuest={isGuest} userId={user?.id} onSave={handleSaveUpload} onDelete={handleDeleteUpload} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="reading"    && activePassage && <ReadingView  passage={activePassage} onFinish={finishReading} onExit={()=>setView("dashboard")}/>}
-        {view==="quiz"       && quizSession   && <QuizView     passage={quizSession.passage} sessionData={quizSession.sessionData} onSubmit={submitQuiz} onExit={()=>setView("dashboard")} dynamicQuestions={pendingQuiz}/>}
+        {view==="quiz"       && quizSession   && <QuizView     passage={quizSession.passage} sessionData={quizSession.sessionData} onSubmit={submitQuiz} onExit={()=>setView("dashboard")} dynamicQuestions={pendingQuiz} userSessions={sessions}/>}
         {view==="results"    && lastResults   && <ResultsView  results={lastResults} onDone={()=>setView("dashboard")} onFlashcards={()=>setView("flashcards")}/>}
         {view==="readingtips" && <ReadingTipsView darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="vault"       && <VaultView sessions={sessions} onStart={startReading} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="settings"    && <SettingsView user={user} setUser={setUser} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme} isGuest={isGuest}/>}
       </main>
 
       {toast && (
@@ -1187,10 +1255,10 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:16,marginBottom:40}}>
         {[
-          {label:"Reading Level",  value:level.title,              sub:`Level ${user?.level} of 10`,  color:T.amber,   icon:"⚡"},
-          {label:"Current Streak", value:`${user?.streak||0}`,     sub:"consecutive days",            color:"#ff7043", icon:"🔥"},
-          {label:"Avg WPM",        value:avgWpm||"--",             sub:"across all sessions",         color:T.teal,    icon:"📖"},
-          {label:"Sessions",       value:user?.totalSessions||"0", sub:"total completed",             color:"#a78bfa", icon:"✓"},
+          {label:"Reading Level",  value:level.title,                      sub:`Level ${user?.level} of 10`,  color:T.amber,   icon:"⚡"},
+          {label:"Current Streak", value:`${user?.streak||0}`,             sub:"consecutive days",            color:"#ff7043", icon:"🔥"},
+          {label:"Streak Shields", value:user?.streakShields||0,           sub:"earned every 7 days",         color:T.teal,    icon:"🛡️"},
+          {label:"Sessions",       value:user?.totalSessions||"0",         sub:"total completed",             color:"#a78bfa", icon:"✓"},
         ].map((s,i)=>(
           <div key={s.label} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"22px",animation:`fadeUp 0.4s ${0.05*i}s ease both`}}>
             <div style={{fontSize:24,marginBottom:8}}>{s.icon}</div>
@@ -1220,6 +1288,16 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:24,animation:"fadeUp 0.4s 0.25s ease both"}}>
         <div>
+          {user?.difficultyLock && (
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 16px",
+              background:`${T.amber}11`,border:`1px solid ${T.amber}33`,borderRadius:10,marginBottom:16,
+              fontSize:13,color:T.amber}}>
+              <SVG d={ICONS.lock} size={14} stroke={T.amber}/>
+              <span>Difficulty Lock is ON — passages and AI are pinned to Level {user?.level}.</span>
+              <button onClick={()=>setView("settings")} style={{marginLeft:"auto",background:"none",border:"none",
+                cursor:"pointer",color:T.amber,fontSize:12,textDecoration:"underline"}}>Change in Settings</button>
+            </div>
+          )}
           <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:16}}>Recommended For You</div>
           <div style={{display:"flex",flexDirection:"column",gap:12}}>
             {PASSAGES.filter(p=>Math.abs(p.level-(user?.level||3))<=2).slice(0,3).map(p=><PassageRow key={p.id} passage={p} onStart={onStart}/>)}
@@ -1722,7 +1800,7 @@ function ReadingView({ passage, onFinish, onExit }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // QUIZ VIEW — ★ accepts dynamicQuestions for uploads/AI passages
 // ─────────────────────────────────────────────────────────────────────────────
-function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) {
+function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions, userSessions }) {
   const T = useTheme();
     // Priority: 1) passage already has quizJson (saved AI passage) — zero API call
   //           2) dynamicQuestions generated after reading (upload / unsaved AI)
@@ -1776,6 +1854,23 @@ function QuizView({ passage, sessionData, onSubmit, onExit, dynamicQuestions }) 
             Skip quiz
           </button>
         </div>
+
+        {/* Comprehension Safety Net */}
+        {(() => {
+          const genre = passage.genre;
+          const similar = (userSessions||[]).filter(s => s.passage?.title && s.comp > 0);
+          if (similar.length < 2) return null;
+          const avg = Math.round(similar.reduce((a,b)=>a+(b.comp||0),0)/similar.length);
+          const color = avg >= 70 ? T.teal : avg >= 50 ? T.amber : T.red;
+          return (
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 16px",
+              background:`${color}11`,border:`1px solid ${color}33`,borderRadius:10,marginBottom:20,fontSize:13}}>
+              <span style={{fontSize:16}}>📊</span>
+              <span style={{color:T.text2}}>Your average comprehension across all sessions:</span>
+              <span style={{color,fontWeight:700,fontFamily:T.mono}}>{avg}%</span>
+            </div>
+          );
+        })()}
 
         {/* Progress dots */}
         <div style={{display:"flex",gap:8,marginBottom:36}}>
@@ -1872,7 +1967,7 @@ function ResultsView({ results, onDone, onFlashcards }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // GENERATE VIEW
 // ─────────────────────────────────────────────────────────────────────────────
-function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz, darkMode, toggleTheme }) {
+function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz, darkMode, toggleTheme, difficultyLock }) {
   const T = useTheme();
     const [genre,   setGenre]   = useState("fiction");
   const [level,   setLevel]   = useState(user?.level||3);
@@ -1951,7 +2046,16 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
       {!isGuest && <RateLimitBanner/>}
       <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:16,padding:"32px 36px",animation:"fadeUp 0.4s 0.05s ease both"}}>
         <SelectGroup label="Genre" value={genre} onChange={setGenre} options={[{v:"fiction",l:"Short Fiction"},{v:"academic",l:"Academic"},{v:"vocabulary",l:"High Vocabulary"}]}/>
-        <SelectGroup label="Difficulty Level" value={level} onChange={setLevel} options={LEVELS.map(l=>({v:l.n,l:`${l.n} — ${l.title}`}))}/>
+        {difficultyLock
+          ? <div style={{marginBottom:28}}>
+              <div style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Difficulty Level</div>
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 16px",background:`${T.amber}11`,border:`1px solid ${T.amber}33`,borderRadius:8}}>
+                <SVG d={ICONS.lock} size={14} stroke={T.amber}/>
+                <span style={{fontSize:13,color:T.amber}}>Locked to Level {user?.level} — {LEVELS[(user?.level||1)-1].title}</span>
+              </div>
+            </div>
+          : <SelectGroup label="Difficulty Level" value={level} onChange={setLevel} options={LEVELS.map(l=>({v:l.n,l:`${l.n} — ${l.title}`}))}/>
+        }
         <SelectGroup label="Length" value={length} onChange={setLength} options={[{v:150,l:"Short (150w)"},{v:300,l:"Medium (300w)"},{v:500,l:"Long (500w)"}]}/>
         <div style={{marginBottom:32}}>
           <div style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Topic (optional)</div>
@@ -2336,6 +2440,267 @@ function SplashScreen() {
           <div key={i} style={{width:8,height:8,borderRadius:"50%",background:T.amber,animation:`pulse 1.2s ${i*0.2}s ease-in-out infinite`}}/>
         ))}
       </div>
+    </div>
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
+// VAULT VIEW — full paginated reading history
+// ─────────────────────────────────────────────────────────────────────────────
+function VaultView({ sessions, onStart, darkMode, toggleTheme }) {
+  const T = useTheme();
+  const [search,   setSearch]   = useState("");
+  const [page,     setPage]     = useState(1);
+  const [sortBy,   setSortBy]   = useState("date");   // date | wpm | comp
+  const PER_PAGE = 20;
+
+  const filtered = sessions
+    .filter(s => !search || (s.passage?.title||"").toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => {
+      if (sortBy === "wpm")  return (b.wpm||0)  - (a.wpm||0);
+      if (sortBy === "comp") return (b.comp||0) - (a.comp||0);
+      return b.ts - a.ts;
+    });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const pageItems  = filtered.slice((page-1)*PER_PAGE, page*PER_PAGE);
+
+  const compColor = c => c >= 70 ? T.teal : c >= 50 ? T.amber : T.red;
+
+  return (
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:1100}}>
+      <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+
+      <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+          <SVG d={ICONS.vault} size={28} stroke={T.amber}/>
+          <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text}}>My Reading Vault</h1>
+        </div>
+        <p style={{color:T.text3,fontSize:15}}>Every passage you've ever read — your complete intellectual history.</p>
+      </div>
+
+      {/* Stats row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:12,marginBottom:28}}>
+        {[
+          { label:"Total Sessions",    value: sessions.length,                                                             color: T.amber  },
+          { label:"Avg WPM",           value: sessions.length ? Math.round(sessions.reduce((a,b)=>a+(b.wpm||0),0)/sessions.length) : 0, color: T.teal   },
+          { label:"Avg Comprehension", value: sessions.filter(s=>s.comp>0).length ? Math.round(sessions.filter(s=>s.comp>0).reduce((a,b)=>a+(b.comp||0),0)/sessions.filter(s=>s.comp>0).length)+"%" : "—", color: "#a78bfa" },
+          { label:"Best WPM",          value: sessions.length ? Math.max(...sessions.map(s=>s.wpm||0)) : 0,               color: "#f97316" },
+        ].map(s => (
+          <div key={s.label} style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,padding:"16px"}}>
+            <div style={{fontFamily:T.mono,fontSize:26,fontWeight:700,color:s.color}}>{s.value}</div>
+            <div style={{fontSize:11,color:T.text3,marginTop:4}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Controls */}
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{position:"relative",flex:1,minWidth:200}}>
+          <SVG d={ICONS.search} size={14} stroke={T.text3} style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)"}}/>
+          <input value={search} onChange={e=>{setSearch(e.target.value);setPage(1);}}
+            placeholder="Search by passage title…"
+            style={{width:"100%",padding:"10px 14px 10px 36px",borderRadius:8,border:`1px solid ${T.border2}`,
+              background:T.card,color:T.text,fontSize:14,outline:"none",boxSizing:"border-box"}}
+            onFocus={e=>e.target.style.borderColor=T.amber}
+            onBlur={e=>e.target.style.borderColor=T.border2}/>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          {[["date","Latest"],["wpm","Top WPM"],["comp","Top Score"]].map(([k,l])=>(
+            <button key={k} onClick={()=>{setSortBy(k);setPage(1);}}
+              style={{padding:"9px 14px",borderRadius:8,border:`1px solid ${sortBy===k?T.amber:T.border}`,
+                background:sortBy===k?T.amberGlow:"transparent",color:sortBy===k?T.amber:T.text3,
+                cursor:"pointer",fontSize:13,fontWeight:sortBy===k?600:400,transition:"all 0.15s"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {sessions.length === 0 ? (
+        <div style={{textAlign:"center",padding:"80px 40px",background:T.card,border:`1px solid ${T.border}`,borderRadius:16}}>
+          <div style={{fontSize:48,marginBottom:12}}>📭</div>
+          <div style={{fontFamily:T.serif,fontSize:22,fontWeight:700,color:T.text,marginBottom:8}}>Your vault is empty</div>
+          <div style={{fontSize:14,color:T.text3}}>Complete your first reading session to start building your history.</div>
+        </div>
+      ) : (
+        <>
+          <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,overflow:"hidden",animation:"fadeUp 0.4s ease both"}}>
+            {/* Table header */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 80px 90px 80px 110px",gap:0,
+              borderBottom:`1px solid ${T.border}`,background:T.surface}}>
+              {["Passage","WPM","Score","Words","Date"].map(h=>(
+                <div key={h} style={{padding:"11px 16px",fontSize:11,color:T.text3,fontWeight:600,
+                  letterSpacing:.5,textTransform:"uppercase"}}>{h}</div>
+              ))}
+            </div>
+            {/* Rows */}
+            {pageItems.map((s,i) => (
+              <div key={s.id||i}
+                style={{display:"grid",gridTemplateColumns:"1fr 80px 90px 80px 110px",
+                  borderBottom:i<pageItems.length-1?`1px solid ${T.border}`:"none",
+                  transition:"background 0.12s",cursor:"pointer"}}
+                onMouseEnter={e=>e.currentTarget.style.background=T.amberGlow}
+                onMouseLeave={e=>e.currentTarget.style.background="transparent"}
+                onClick={()=>{
+                  const p = PASSAGES.find(p=>p.title===s.passage?.title);
+                  if(p) onStart(p);
+                }}>
+                <div style={{padding:"13px 16px",fontSize:14,color:T.text,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                  <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.passage?.title||"—"}</div>
+                  {s.passage?.title && PASSAGES.find(p=>p.title===s.passage.title) &&
+                    <span style={{fontSize:10,color:T.teal,flexShrink:0}}>↩ re-read</span>}
+                </div>
+                <div style={{padding:"13px 16px",fontSize:14,color:T.amber,fontWeight:700,fontFamily:T.mono}}>{s.wpm||"—"}</div>
+                <div style={{padding:"13px 16px",fontSize:14,fontFamily:T.mono}}>
+                  {s.comp>0 ? <span style={{color:compColor(s.comp),fontWeight:600}}>{s.comp}%</span> : <span style={{color:T.text3}}>—</span>}
+                </div>
+                <div style={{padding:"13px 16px",fontSize:13,color:T.text2,fontFamily:T.mono}}>{s.wordsRead||"—"}</div>
+                <div style={{padding:"13px 16px",fontSize:12,color:T.text3}}>{new Date(s.ts).toLocaleDateString()}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:10,marginTop:24}}>
+              <Btn variant="secondary" disabled={page===1} onClick={()=>setPage(p=>p-1)}>← Prev</Btn>
+              <span style={{fontSize:13,color:T.text3}}>Page {page} of {totalPages} · {filtered.length} sessions</span>
+              <Btn variant="secondary" disabled={page>=totalPages} onClick={()=>setPage(p=>p+1)}>Next →</Btn>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS VIEW — difficulty lock + account info
+// ─────────────────────────────────────────────────────────────────────────────
+function SettingsView({ user, setUser, notify, darkMode, toggleTheme, isGuest }) {
+  const T = useTheme();
+  const [saving, setSaving] = useState(false);
+
+  const toggleLock = async () => {
+    if (isGuest) { notify("Sign in to use Settings","err"); return; }
+    const next = !user?.difficultyLock;
+    setSaving(true);
+    try {
+      await setDifficultyLock(user.id, next);
+      setUser(prev => ({...prev, difficultyLock: next}));
+      notify(next ? "Difficulty locked to Level "+user.level : "Difficulty lock removed");
+    } catch(e) { notify("Couldn't save — try again","err"); }
+    setSaving(false);
+  };
+
+  const Section = ({title, children}) => (
+    <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,
+      padding:"24px 28px",marginBottom:20,animation:"fadeUp 0.4s ease both"}}>
+      <div style={{fontFamily:T.serif,fontSize:17,fontWeight:700,color:T.text,marginBottom:18,
+        paddingBottom:12,borderBottom:`1px solid ${T.border}`}}>{title}</div>
+      {children}
+    </div>
+  );
+
+  const Row = ({label, desc, right}) => (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+      gap:20,padding:"12px 0",borderBottom:`1px solid ${T.border}`}}>
+      <div>
+        <div style={{fontSize:14,fontWeight:600,color:T.text}}>{label}</div>
+        {desc && <div style={{fontSize:12,color:T.text3,marginTop:3}}>{desc}</div>}
+      </div>
+      {right}
+    </div>
+  );
+
+  const Toggle = ({on, onToggle, disabled}) => (
+    <button onClick={onToggle} disabled={disabled}
+      style={{width:46,height:26,borderRadius:13,border:"none",cursor:disabled?"not-allowed":"pointer",
+        background:on?T.amber:T.border2,position:"relative",transition:"background 0.2s",flexShrink:0}}>
+      <div style={{position:"absolute",top:3,left:on?23:3,width:20,height:20,borderRadius:"50%",
+        background:"#fff",transition:"left 0.2s",boxShadow:"0 1px 4px rgba(0,0,0,0.3)"}}/>
+    </button>
+  );
+
+  return (
+    <div style={{padding:"clamp(16px,4vw,40px) clamp(16px,4vw,48px)",maxWidth:700}}>
+      <ThemeToggleBtn darkMode={darkMode} toggleTheme={toggleTheme}/>
+
+      <div style={{marginBottom:28,animation:"fadeUp 0.4s ease both"}}>
+        <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,marginBottom:6}}>Settings</h1>
+        <p style={{color:T.text3,fontSize:15}}>Manage your reading preferences and account.</p>
+      </div>
+
+      {/* Account */}
+      <Section title="Account">
+        <Row label="Name"  right={<span style={{fontSize:14,color:T.text2}}>{user?.name||"—"}</span>}/>
+        <Row label="Email" right={<span style={{fontSize:13,color:T.text2,fontFamily:T.mono}}>{user?.email||"—"}</span>}/>
+        <Row label="Reading Level" right={
+          <span style={{fontSize:13,color:T.amber,fontWeight:600}}>
+            Level {user?.level} — {LEVELS[(user?.level||1)-1].title}
+          </span>
+        }/>
+        <Row label="Streak Shields"
+          desc="Earned every 7-day streak. Automatically used when you miss a day."
+          right={
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:22}}>🛡️</span>
+              <span style={{fontFamily:T.mono,fontSize:18,fontWeight:700,color:T.teal}}>{user?.streakShields||0}</span>
+            </div>
+          }/>
+      </Section>
+
+      {/* Reading Preferences */}
+      <Section title="Reading Preferences">
+        <Row
+          label="Difficulty Lock"
+          desc={user?.difficultyLock
+            ? `Locked to Level ${user?.level} — AI generation and recommendations stay at your current level.`
+            : "Off — the app will suggest passages across all levels."}
+          right={<Toggle on={!!user?.difficultyLock} onToggle={toggleLock} disabled={saving||isGuest}/>}
+        />
+        <Row
+          label="Appearance"
+          desc="Toggle between dark and light reading mode."
+          right={
+            <button onClick={toggleTheme}
+              style={{display:"flex",alignItems:"center",gap:8,padding:"7px 14px",borderRadius:8,
+                border:`1px solid ${T.border2}`,background:T.surface,color:T.text2,cursor:"pointer",fontSize:13}}>
+              <SVG d={darkMode?ICONS.sun:ICONS.moon} size={14} stroke="currentColor"/>
+              {darkMode?"Switch to Light":"Switch to Dark"}
+            </button>
+          }
+        />
+      </Section>
+
+      {/* Security — streak shield info */}
+      <Section title="Security & Progress Protection">
+        <div style={{fontSize:14,color:T.text2,lineHeight:1.8}}>
+          <p style={{marginBottom:12}}>
+            <strong style={{color:T.text}}>Streak Shield</strong> — Earn one shield for every 7-day reading streak completed.
+            If you miss a day, a shield is automatically spent to preserve your streak. You currently
+            have <strong style={{color:T.teal}}>{user?.streakShields||0} shield{user?.streakShields!==1?"s":""}</strong>.
+          </p>
+          <p style={{marginBottom:12}}>
+            <strong style={{color:T.text}}>Difficulty Lock</strong> — When enabled, AI-generated passages
+            are pinned to your current reading level. Recommended passages on the dashboard also stay within
+            your level. Turn this on if you want consistent, manageable practice without the app pushing
+            you to harder material.
+          </p>
+          <p>
+            <strong style={{color:T.text}}>My Reading Vault</strong> — Every session you complete is
+            permanently saved to your account. Visit the Vault from the sidebar to browse your full
+            reading history, sort by WPM or comprehension score, and re-read any curated passage.
+          </p>
+        </div>
+      </Section>
+
+      {isGuest && (
+        <div style={{padding:"14px 18px",background:`${T.amber}11`,border:`1px solid ${T.amber}33`,
+          borderRadius:10,fontSize:14,color:T.amber}}>
+          ⚠️ You're in guest mode. Sign up to save settings permanently.
+        </div>
+      )}
     </div>
   );
 }
