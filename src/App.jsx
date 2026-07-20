@@ -426,6 +426,90 @@ async function generateQuizForPassage(passageText, passageTitle) {
   }));
 }
 
+// ── Variety helpers — Daily Drop, Genre Roulette, Mood, Weekly Theme ──────────
+
+// Deterministic day-of-year index so everyone sees the same daily topic
+function dayOfYear(d = new Date()) {
+  const start = new Date(d.getFullYear(), 0, 0);
+  const diff  = d - start;
+  return Math.floor(diff / 86400000);
+}
+
+// ISO week number so the theme rotates every Monday
+function isoWeek(d = new Date()) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil((((t - yearStart) / 86400000) + 1) / 7);
+}
+
+const DAILY_TOPICS = [
+  "a scientific breakthrough", "a historical turning point", "a philosophical question about identity",
+  "an economic trend shaping the world", "a discovery in space exploration", "a psychological phenomenon",
+  "an environmental challenge", "a technological innovation", "a cultural tradition from around the world",
+  "a mathematical curiosity", "an act of human courage", "a mystery in nature",
+];
+const DAILY_GENRES = ["academic", "fiction", "vocabulary"];
+
+function todaysTopic()  { return DAILY_TOPICS[dayOfYear() % DAILY_TOPICS.length]; }
+function todaysGenre()  { return DAILY_GENRES[dayOfYear() % DAILY_GENRES.length]; }
+function todayKey()     { return new Date().toISOString().slice(0, 10); }
+
+const WEEKLY_THEMES = [
+  "Space & Astronomy", "Ancient Civilizations", "The Human Mind", "Climate & Nature",
+  "Money & Economics", "Art & Creativity", "Great Inventions", "Ocean Mysteries",
+  "War & Peace", "Love & Relationships", "The Future of Technology", "Myths & Legends",
+];
+function currentWeeklyTheme() { return WEEKLY_THEMES[isoWeek() % WEEKLY_THEMES.length]; }
+
+// Weekly theme opt-in — simple UI preference, stored locally
+function getWeeklyThemeOptIn() { return localStorage.getItem("readtor_weekly_theme_optin") === "true"; }
+function setWeeklyThemeOptIn(v) { localStorage.setItem("readtor_weekly_theme_optin", v ? "true" : "false"); }
+
+// Genre Roulette — pick a genre the user hasn't read yet, then a random passage from it
+const ROULETTE_GENRES = ["Science Fiction", "Academic", "Fiction", "Literary Fiction"];
+function pickRoulettePassage(sessions) {
+  const readTitles = new Set((sessions || []).map(s => s.passage?.title));
+  const readGenres = new Set(
+    PASSAGES.filter(p => readTitles.has(p.title)).map(p => p.genre)
+  );
+  const untried = ROULETTE_GENRES.filter(g => !readGenres.has(g));
+  const pool    = untried.length > 0 ? untried : ROULETTE_GENRES;
+  const genre   = pool[Math.floor(Math.random() * pool.length)];
+  const candidates = PASSAGES.filter(p => p.genre === genre);
+  return candidates[Math.floor(Math.random() * candidates.length)] || PASSAGES[0];
+}
+
+// Reading Mood Selector — match a passage to how the user feels right now
+const MOODS = [
+  { id:"curious",    label:"Curious",    icon:"🔍", desc:"Something to make you think" },
+  { id:"focused",    label:"Focused",    icon:"🎯", desc:"Short, structured, no fluff"   },
+  { id:"relaxed",    label:"Relaxed",    icon:"🌙", desc:"Easy, calm, low pressure"      },
+  { id:"challenged", label:"Challenged", icon:"🔥", desc:"Push your limits"              },
+];
+function pickPassageByMood(mood, userLevel = 3) {
+  let pool;
+  switch (mood) {
+    case "curious":
+      pool = PASSAGES.filter(p => ["Academic","Science Fiction"].includes(p.genre) && p.level >= 6);
+      break;
+    case "focused":
+      pool = PASSAGES.filter(p => p.wordCount <= 265 && p.genre === "Academic");
+      break;
+    case "relaxed":
+      pool = PASSAGES.filter(p => ["Fiction","Literary Fiction"].includes(p.genre) && p.level <= 5);
+      break;
+    case "challenged":
+      pool = PASSAGES.filter(p => p.level >= 8);
+      break;
+    default:
+      pool = PASSAGES;
+  }
+  if (pool.length === 0) pool = PASSAGES;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // ── Supabase helpers ──────────────────────────────────────────────────────────
 
 async function fetchSessions(userId) {
@@ -567,6 +651,44 @@ async function saveUpload(userId, { title, text, wordCount }) {
 async function deleteUpload(uploadId) {
   const { error } = await supabase.from("uploads").delete().eq("id", uploadId);
   if (error) throw error;
+}
+
+// ★ Daily Drop helpers — one shared AI passage per calendar day
+async function fetchDailyPassage(dateKey) {
+  const { data, error } = await supabase
+    .from("daily_passages")
+    .select("*")
+    .eq("date_key", dateKey)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id:        `daily-${data.date_key}`,
+    title:     data.title,
+    genre:     data.genre,
+    level:     data.level,
+    wordCount: data.word_count,
+    text:      data.text,
+    quizJson:  typeof data.quiz_json === "string" ? JSON.parse(data.quiz_json) : data.quiz_json,
+    tags:      ["daily-drop"],
+    isDaily:   true,
+  };
+}
+
+async function saveDailyPassage(dateKey, { title, genre, level, wordCount, text, quizJson }) {
+  const { data, error } = await supabase.from("daily_passages").insert({
+    date_key:   dateKey,
+    title, genre, level,
+    word_count: wordCount,
+    text,
+    quiz_json:  JSON.stringify(quizJson),
+  }).select().single();
+  if (error) throw error;
+  return {
+    id: `daily-${dateKey}`, title: data.title, genre: data.genre, level: data.level,
+    wordCount: data.word_count, text: data.text, quizJson,
+    tags: ["daily-drop"], isDaily: true,
+  };
 }
 
 // ★ AI Passages helpers — shared community library
@@ -1224,18 +1346,74 @@ function ThemeToggleBtn({ darkMode, toggleTheme }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, darkMode, toggleTheme }) {
   const T = useTheme();
-    const level    = LEVELS[(user?.level||1)-1];
+  const level    = LEVELS[(user?.level||1)-1];
   const quote    = QUOTES[new Date().getDate()%QUOTES.length];
   const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.wpm||0),0)/sessions.length) : 0;
   const avgComp  = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.comp||0),0)/sessions.length) : 0;
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
 
-  // ★ Quick Start items now have a view target
+  // ★ Variety features state
+  const [dailyPassage,    setDailyPassage]    = useState(null);
+  const [loadingDaily,    setLoadingDaily]    = useState(true);
+  const [rouletteLoading, setRouletteLoading] = useState(false);
+  const [moodOpen,        setMoodOpen]        = useState(false);
+  const weeklyTheme = currentWeeklyTheme();
+
+  // Load (or generate) today's Daily Drop passage once on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const key = todayKey();
+      try {
+        let daily = await fetchDailyPassage(key);
+        if (!daily && !isGuest) {
+          // First visitor of the day generates it for everyone
+          const topic = todaysTopic();
+          const genre = todaysGenre();
+          const prompts = {
+            fiction:    `Write a 280-word short fiction passage. Use engaging narrative. Topic: ${topic}. Write only the passage, no title.`,
+            academic:   `Write a 280-word expository passage. Use clear academic language. Topic: ${topic}. Write only the passage, no title.`,
+            vocabulary: `Write a 280-word passage with rich vocabulary used naturally. Topic: ${topic}. Write only the passage, no title.`,
+          };
+          const text = await generateWithAI(prompts[genre]);
+          let quizJson = null;
+          try { quizJson = await generateQuizForPassage(text, topic); } catch(e) {}
+          const title = topic.charAt(0).toUpperCase() + topic.slice(1);
+          daily = await saveDailyPassage(key, {
+            title, genre: `Daily · ${genre}`, level: 5,
+            wordCount: text.split(/\s+/).length, text, quizJson,
+          });
+        }
+        if (!cancelled) setDailyPassage(daily);
+      } catch(e) { console.error("Daily drop failed:", e); }
+      if (!cancelled) setLoadingDaily(false);
+    })();
+    return () => { cancelled = true; };
+  }, [isGuest]);
+
+  const handleSurpriseMe = () => {
+    setRouletteLoading(true);
+    setTimeout(() => {
+      const passage = pickRoulettePassage(sessions);
+      setRouletteLoading(false);
+      onStart(passage);
+    }, 500); // brief pause so the "shuffling" feel registers
+  };
+
+  const handleMoodPick = (moodId) => {
+    setMoodOpen(false);
+    const passage = pickPassageByMood(moodId, user?.level);
+    onStart(passage);
+  };
+
+  // ★ Quick Start items — some navigate, some run an action directly
   const quickStart = [
     { label:"Browse Library",   icon:"📚", desc:"12 curated passages by level",  view:"library"    },
     { label:"Generate with AI", icon:"✨", desc:"Free AI content at your level",  view:"generate"   },
     { label:"Upload a Text",    icon:"📤", desc:"Practice with your own content", view:"upload"     },
     { label:`Flashcards${dueCards>0?` (${dueCards} due)`:""}`, icon:"🃏", desc:"Spaced repetition review", view:"flashcards" },
+    { label:"Surprise Me",      icon:"🎲", desc:"Random passage, new genre",     action:handleSurpriseMe },
+    { label:"Read by Mood",     icon:"🎭", desc:"Match a passage to how you feel", action:()=>setMoodOpen(true) },
   ];
 
   return (
@@ -1267,6 +1445,53 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
             <div style={{fontSize:13,color:T.text2,marginTop:2,fontWeight:500}}>{s.label}</div>
           </div>
         ))}
+      </div>
+
+      {/* ★ Weekly Theme banner */}
+      <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 18px",marginBottom:20,
+        background:`linear-gradient(90deg,${T.amberGlow},transparent)`,border:`1px solid ${T.amber}33`,
+        borderRadius:12,animation:"fadeUp 0.4s 0.15s ease both",flexWrap:"wrap"}}>
+        <span style={{fontSize:18}}>🗓️</span>
+        <span style={{fontSize:13,color:T.text2}}>
+          This week's theme: <strong style={{color:T.amber}}>{weeklyTheme}</strong>
+        </span>
+        <span style={{fontSize:11,color:T.text3,marginLeft:"auto"}}>
+          {getWeeklyThemeOptIn() ? "✓ Applied to your AI generations" : "Enable in Settings to shape your AI passages"}
+        </span>
+      </div>
+
+      {/* ★ Daily Drop hero card */}
+      <div style={{background:`linear-gradient(135deg,${T.card},${T.surface})`,border:`1px solid ${T.teal}44`,
+        borderRadius:16,padding:"24px 28px",marginBottom:24,animation:"fadeUp 0.4s 0.18s ease both",
+        position:"relative",overflow:"hidden"}}>
+        <div style={{position:"absolute",top:-30,right:-30,width:120,height:120,borderRadius:"50%",
+          background:`${T.teal}11`,pointerEvents:"none"}}/>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:20,flexWrap:"wrap",position:"relative"}}>
+          <div style={{flex:1,minWidth:220}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <span style={{fontSize:20}}>📰</span>
+              <span style={{fontSize:11,color:T.teal,fontWeight:700,letterSpacing:1,textTransform:"uppercase"}}>Today's Drop</span>
+            </div>
+            {loadingDaily ? (
+              <div style={{display:"flex",alignItems:"center",gap:10,color:T.text3,fontSize:14}}>
+                <span style={{animation:"spin 1.2s linear infinite",display:"inline-block"}}>✦</span>
+                Preparing today's passage…
+              </div>
+            ) : dailyPassage ? (
+              <>
+                <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:4}}>{dailyPassage.title}</div>
+                <div style={{fontSize:13,color:T.text3}}>{dailyPassage.wordCount} words · fresh every day, same for every reader</div>
+              </>
+            ) : (
+              <div style={{fontSize:14,color:T.text3}}>Sign in to unlock today's Daily Drop passage.</div>
+            )}
+          </div>
+          {dailyPassage && !loadingDaily && (
+            <Btn variant="teal" onClick={()=>onStart(dailyPassage)}>
+              Read Today's Passage <SVG d={ICONS.arrow} size={14} stroke={T.bg}/>
+            </Btn>
+          )}
+        </div>
       </div>
 
       <div style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:14,padding:"24px 28px",marginBottom:32,animation:"fadeUp 0.4s 0.2s ease both"}}>
@@ -1307,13 +1532,14 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
           <div style={{fontFamily:T.serif,fontSize:20,fontWeight:700,color:T.text,marginBottom:16}}>Quick Start</div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
             {quickStart.map(a=>(
-              <button key={a.label} onClick={()=>setView(a.view)}
+              <button key={a.label} onClick={()=>a.action ? a.action() : setView(a.view)}
+                disabled={a.label==="Surprise Me" && rouletteLoading}
                 style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:T.card,border:`1px solid ${T.border}`,borderRadius:10,cursor:"pointer",textAlign:"left",transition:"all 0.15s",width:"100%"}}
                 onMouseEnter={e=>{e.currentTarget.style.borderColor=T.amber+"55";e.currentTarget.style.background=T.amberGlow;}}
                 onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.card;}}>
-                <span style={{fontSize:22}}>{a.icon}</span>
+                <span style={{fontSize:22}}>{a.label==="Surprise Me"&&rouletteLoading?"🔄":a.icon}</span>
                 <div>
-                  <div style={{fontSize:14,fontWeight:600,color:T.text}}>{a.label}</div>
+                  <div style={{fontSize:14,fontWeight:600,color:T.text}}>{a.label==="Surprise Me"&&rouletteLoading?"Shuffling…":a.label}</div>
                   <div style={{fontSize:12,color:T.text3}}>{a.desc}</div>
                 </div>
               </button>
@@ -1356,6 +1582,38 @@ function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, 
                 Showing 10 of {sessions.length} sessions
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ★ Mood Selector modal */}
+      {moodOpen && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:300,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+          onClick={()=>setMoodOpen(false)}>
+          <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:18,
+            padding:"32px",maxWidth:460,width:"100%",animation:"fadeUp 0.25s ease both"}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{fontFamily:T.serif,fontSize:22,fontWeight:700,color:T.text,marginBottom:6}}>How are you feeling?</div>
+            <div style={{fontSize:13,color:T.text3,marginBottom:24}}>We'll match a passage to your mood.</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+              {MOODS.map(m=>(
+                <button key={m.id} onClick={()=>handleMoodPick(m.id)}
+                  style={{background:T.card,border:`1px solid ${T.border}`,borderRadius:12,
+                    padding:"18px 14px",cursor:"pointer",textAlign:"left",transition:"all 0.15s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=T.amber+"77";e.currentTarget.style.background=T.amberGlow;}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background=T.card;}}>
+                  <div style={{fontSize:26,marginBottom:8}}>{m.icon}</div>
+                  <div style={{fontSize:14,fontWeight:700,color:T.text,marginBottom:3}}>{m.label}</div>
+                  <div style={{fontSize:11,color:T.text3,lineHeight:1.4}}>{m.desc}</div>
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>setMoodOpen(false)}
+              style={{marginTop:20,width:"100%",background:"none",border:"none",cursor:"pointer",
+                color:T.text3,fontSize:13,padding:8}}>
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -1969,12 +2227,14 @@ function ResultsView({ results, onDone, onFlashcards }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegenerateQuiz, darkMode, toggleTheme, difficultyLock }) {
   const T = useTheme();
-    const [genre,   setGenre]   = useState("fiction");
+  const [genre,   setGenre]   = useState("fiction");
   const [level,   setLevel]   = useState(user?.level||3);
   const [length,  setLength]  = useState(300);
-  const [topic,   setTopic]   = useState("");
+  // ★ Pre-fill topic with the weekly theme if the user opted in
+  const [topic,   setTopic]   = useState(() => getWeeklyThemeOptIn() ? currentWeeklyTheme() : "");
   const [loading, setLoading] = useState(false);
   const [status,  setStatus]  = useState("");
+  const themeApplied = getWeeklyThemeOptIn() && topic === currentWeeklyTheme();
 
   const generate = async () => {
     if (isGuest) { notify("Sign up to use AI Generation","err"); return; }
@@ -2058,8 +2318,15 @@ function GenerateView({ user, isGuest, onStart, notify, onSaveAIPassage, onRegen
         }
         <SelectGroup label="Length" value={length} onChange={setLength} options={[{v:150,l:"Short (150w)"},{v:300,l:"Medium (300w)"},{v:500,l:"Long (500w)"}]}/>
         <div style={{marginBottom:32}}>
-          <div style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Topic (optional)</div>
-          <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="e.g. deep-sea exploration, ancient Rome, quantum mechanics…" style={{width:"100%",padding:"13px 16px",borderRadius:8,border:`1px solid ${T.border2}`,background:T.surface,color:T.text,fontSize:15,outline:"none",transition:"border-color 0.2s"}} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=T.border2}/>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+            <div style={{fontSize:12,color:T.text3,fontWeight:600,letterSpacing:.8,textTransform:"uppercase"}}>Topic (optional)</div>
+            {themeApplied && (
+              <span style={{fontSize:10,color:T.teal,background:`${T.teal}18`,padding:"2px 8px",borderRadius:20,fontWeight:600}}>
+                🗓️ This week's theme
+              </span>
+            )}
+          </div>
+          <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="e.g. deep-sea exploration, ancient Rome, quantum mechanics…" style={{width:"100%",padding:"13px 16px",borderRadius:8,border:`1px solid ${themeApplied?T.teal+"66":T.border2}`,background:T.surface,color:T.text,fontSize:15,outline:"none",transition:"border-color 0.2s"}} onFocus={e=>e.target.style.borderColor=T.amber} onBlur={e=>e.target.style.borderColor=themeApplied?T.teal+"66":T.border2}/>
         </div>
         <Btn size="lg" onClick={generate} disabled={loading||isGuest} style={{width:"100%",justifyContent:"center"}}>
           {loading?<><span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>✦</span> {status||"Generating…"}</>:<>✨ Generate Passage</>}
@@ -2579,7 +2846,8 @@ function VaultView({ sessions, onStart, darkMode, toggleTheme }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function SettingsView({ user, setUser, notify, darkMode, toggleTheme, isGuest }) {
   const T = useTheme();
-  const [saving, setSaving] = useState(false);
+  const [saving,       setSaving]       = useState(false);
+  const [themeOptIn,   setThemeOptIn]   = useState(getWeeklyThemeOptIn());
 
   const toggleLock = async () => {
     if (isGuest) { notify("Sign in to use Settings","err"); return; }
@@ -2591,6 +2859,13 @@ function SettingsView({ user, setUser, notify, darkMode, toggleTheme, isGuest })
       notify(next ? "Difficulty locked to Level "+user.level : "Difficulty lock removed");
     } catch(e) { notify("Couldn't save — try again","err"); }
     setSaving(false);
+  };
+
+  const toggleWeeklyTheme = () => {
+    const next = !themeOptIn;
+    setWeeklyThemeOptIn(next);
+    setThemeOptIn(next);
+    notify(next ? `Weekly theme "${currentWeeklyTheme()}" will shape your AI passages` : "Weekly theme opt-in removed");
   };
 
   const Section = ({title, children}) => (
@@ -2658,6 +2933,11 @@ function SettingsView({ user, setUser, notify, darkMode, toggleTheme, isGuest })
             ? `Locked to Level ${user?.level} — AI generation and recommendations stay at your current level.`
             : "Off — the app will suggest passages across all levels."}
           right={<Toggle on={!!user?.difficultyLock} onToggle={toggleLock} disabled={saving||isGuest}/>}
+        />
+        <Row
+          label="Weekly Theme Prompts"
+          desc={`This week: "${currentWeeklyTheme()}". ${themeOptIn ? "Applied to your AI Generate topic by default." : "Off — pick your own topics freely."}`}
+          right={<Toggle on={themeOptIn} onToggle={toggleWeeklyTheme}/>}
         />
         <Row
           label="Appearance"
