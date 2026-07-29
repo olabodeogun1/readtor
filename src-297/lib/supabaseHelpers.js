@@ -269,37 +269,3 @@ export async function updateAIPassageQuiz(passageId, quizJson) {
     .eq("id", passageId);
   if (error) throw error;
 }
-
-// ★ Milestones — persisted so celebrations never repeat across devices ──────
-export async function updateMilestones(userId, milestonesArray) {
-  const { error } = await supabase
-    .from("profiles")
-    .update({ milestones: JSON.stringify(milestonesArray) })
-    .eq("id", userId);
-  if (error) throw error;
-}
-
-// ★ Leaderboard opt-in — controls whether the user's real name is shown ─────
-export async function setLeaderboardVisible(userId, visible) {
-  const { error } = await supabase
-    .from("profiles")
-    .update({ leaderboard_visible: visible })
-    .eq("id", userId);
-  if (error) throw error;
-}
-
-// ★ Weekly Leaderboard — privacy-safe aggregated RPC call ────────────────────
-// get_weekly_leaderboard() returns only aggregated, anonymised-by-default
-// rows — no raw session or user_id data is exposed.
-export async function fetchWeeklyLeaderboard() {
-  const { data, error } = await supabase.rpc("get_weekly_leaderboard");
-  if (error) throw error;
-  return (data || []).map(row => ({
-    displayName:      row.display_name,
-    totalWords:       row.total_words,
-    avgComprehension: row.avg_comprehension,
-    sessionCount:     row.session_count,
-    isAnonymous:      row.is_anonymous,
-    isMe:             row.is_me,
-  }));
-}

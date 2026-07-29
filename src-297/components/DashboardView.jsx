@@ -2,10 +2,9 @@ import { useState, useEffect } from "react";
 import { useTheme } from "../theme";
 import { LEVELS, QUOTES, PASSAGES } from "../constants";
 import { SVG, ICONS } from "../icons";
-import { Btn, Tag, ThemeToggleBtn, TitleBadge } from "./common";
+import { Btn, Tag, ThemeToggleBtn } from "./common";
 import { fetchDailyPassage, saveDailyPassage } from "../lib/supabaseHelpers";
 import { generateWithAI, generateQuizForPassage } from "../lib/pollinationsApi";
-import { computeReaderStats, computeTitle } from "../lib/titles";
 import {
   currentWeeklyTheme, getWeeklyThemeOptIn, todayKey, todaysTopic, todaysGenre,
   pickRoulettePassage, pickPassageByMood, MOODS,
@@ -14,7 +13,6 @@ import {
 export default function DashboardView({ user, isGuest, sessions, onStart, flashcards, setView, darkMode, toggleTheme }) {
   const T = useTheme();
   const level    = LEVELS[(user?.level||1)-1];
-  const readerTitle = computeTitle(computeReaderStats(sessions, user?.streak));
   const quote    = QUOTES[new Date().getDate()%QUOTES.length];
   const avgWpm   = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.wpm||0),0)/sessions.length) : 0;
   const avgComp  = sessions.length ? Math.round(sessions.reduce((s,x)=>s+(x.comp||0),0)/sessions.length) : 0;
@@ -91,10 +89,7 @@ export default function DashboardView({ user, isGuest, sessions, onStart, flashc
         <div>
           <div style={{fontSize:13,color:T.text3,marginBottom:6,letterSpacing:.5}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
           <h1 style={{fontFamily:T.serif,fontSize:36,fontWeight:900,color:T.text,letterSpacing:-1}}>Good {new Date().getHours()<12?"morning":"afternoon"}, {user?.name?.split(" ")[0]}.</h1>
-          <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginTop:8}}>
-            <p style={{color:T.text3,fontSize:15,margin:0}}>{isGuest?"You're in guest mode — sign up to save your progress.":`Level ${user?.level} · ${level.title} · ${user?.streak} day streak 🔥`}</p>
-            {!isGuest && <TitleBadge title={readerTitle} size="sm"/>}
-          </div>
+          <p style={{color:T.text3,marginTop:6,fontSize:15}}>{isGuest?"You're in guest mode — sign up to save your progress.":`Level ${user?.level} · ${level.title} · ${user?.streak} day streak 🔥`}</p>
         </div>
         <div style={{maxWidth:320,padding:"16px 20px",background:T.card,border:`1px solid ${T.border}`,borderRadius:12,borderLeft:`3px solid ${T.amber}`}}>
           <div style={{fontFamily:T.serif,fontSize:14,fontStyle:"italic",color:T.text2,lineHeight:1.6,marginBottom:8}}>"{quote.q}"</div>

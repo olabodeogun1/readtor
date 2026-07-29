@@ -2,20 +2,14 @@ import { useState } from "react";
 import { useTheme } from "../theme";
 import { LEVELS } from "../constants";
 import { SVG, ICONS } from "../icons";
-import { ThemeToggleBtn, TitleBadge } from "./common";
-import { setDifficultyLock, setLeaderboardVisible } from "../lib/supabaseHelpers";
+import { ThemeToggleBtn } from "./common";
+import { setDifficultyLock } from "../lib/supabaseHelpers";
 import { getWeeklyThemeOptIn, setWeeklyThemeOptIn, currentWeeklyTheme } from "../lib/variety";
-import { computeReaderStats, computeTitle, nextTitle } from "../lib/titles";
 
-export default function SettingsView({ user, setUser, notify, darkMode, toggleTheme, isGuest, sessions }) {
+export default function SettingsView({ user, setUser, notify, darkMode, toggleTheme, isGuest }) {
   const T = useTheme();
   const [saving,       setSaving]       = useState(false);
   const [themeOptIn,   setThemeOptIn]   = useState(getWeeklyThemeOptIn());
-  const [savingBoard,  setSavingBoard]  = useState(false);
-
-  const stats  = computeReaderStats(sessions || [], user?.streak);
-  const title  = computeTitle(stats);
-  const upNext = nextTitle(stats, title.id);
 
   const toggleLock = async () => {
     if (isGuest) { notify("Sign in to use Settings","err"); return; }
@@ -34,18 +28,6 @@ export default function SettingsView({ user, setUser, notify, darkMode, toggleTh
     setWeeklyThemeOptIn(next);
     setThemeOptIn(next);
     notify(next ? `Weekly theme "${currentWeeklyTheme()}" will shape your AI passages` : "Weekly theme opt-in removed");
-  };
-
-  const toggleLeaderboard = async () => {
-    if (isGuest) { notify("Sign in to use Settings","err"); return; }
-    const next = !user?.leaderboardVisible;
-    setSavingBoard(true);
-    try {
-      await setLeaderboardVisible(user.id, next);
-      setUser(prev => ({...prev, leaderboardVisible: next}));
-      notify(next ? "Your name is now visible on the Leaderboard" : "You're anonymous on the Leaderboard again");
-    } catch(e) { notify("Couldn't save — try again","err"); }
-    setSavingBoard(false);
   };
 
   const Section = ({title, children}) => (
@@ -105,27 +87,6 @@ export default function SettingsView({ user, setUser, notify, darkMode, toggleTh
           }/>
       </Section>
 
-      {/* Your Reader Title */}
-      <Section title="Your Reader Title">
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:14,marginBottom:upNext?16:0}}>
-          <div>
-            <div style={{fontSize:12,color:T.text3,marginBottom:8}}>Earned from your reading patterns — genres, consistency, and comprehension.</div>
-            <TitleBadge title={title} />
-          </div>
-        </div>
-        {upNext ? (
-          <div style={{marginTop:8,padding:"12px 14px",background:T.surface,borderRadius:10,border:`1px solid ${T.border}`}}>
-            <div style={{fontSize:11,color:T.text3,fontWeight:600,letterSpacing:.5,textTransform:"uppercase",marginBottom:4}}>Next Title</div>
-            <div style={{display:"flex",alignItems:"center",gap:8,fontSize:14,color:T.text}}>
-              <span style={{fontSize:16}}>{upNext.icon}</span> {upNext.name}
-            </div>
-            <div style={{fontSize:12,color:T.text3,marginTop:3}}>{upNext.desc}</div>
-          </div>
-        ) : (
-          <div style={{marginTop:8,fontSize:13,color:T.amber}}>👑 You've reached the highest title — The Polymath.</div>
-        )}
-      </Section>
-
       {/* Reading Preferences */}
       <Section title="Reading Preferences">
         <Row
@@ -139,13 +100,6 @@ export default function SettingsView({ user, setUser, notify, darkMode, toggleTh
           label="Weekly Theme Prompts"
           desc={`This week: "${currentWeeklyTheme()}". ${themeOptIn ? "Applied to your AI Generate topic by default." : "Off — pick your own topics freely."}`}
           right={<Toggle on={themeOptIn} onToggle={toggleWeeklyTheme}/>}
-        />
-        <Row
-          label="Show Name on Leaderboard"
-          desc={user?.leaderboardVisible
-            ? "Your real name is shown next to your weekly ranking."
-            : "Off — you appear as \"Anonymous Reader\" but are still ranked."}
-          right={<Toggle on={!!user?.leaderboardVisible} onToggle={toggleLeaderboard} disabled={savingBoard||isGuest}/>}
         />
         <Row
           label="Appearance"

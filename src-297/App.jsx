@@ -12,12 +12,10 @@ import {
   fetchUploads, saveUpload, deleteUpload,
   fetchAIPassages, saveAIPassage, fetchMyAIPassages,
   publishAIPassage, unpublishAIPassage, deleteAIPassage, updateAIPassageQuiz,
-  updateMilestones,
 } from "./lib/supabaseHelpers";
 import { generateQuizForPassage } from "./lib/pollinationsApi";
-import { checkNewMilestones } from "./lib/milestones";
 
-import { SplashScreen, MilestoneCelebration } from "./components/common";
+import { SplashScreen } from "./components/common";
 import AuthPage         from "./components/AuthPage";
 import DashboardView    from "./components/DashboardView";
 import LibraryView      from "./components/LibraryView";
@@ -30,7 +28,6 @@ import UploadView       from "./components/UploadView";
 import ReadingTipsView  from "./components/ReadingTipsView";
 import VaultView        from "./components/VaultView";
 import SettingsView     from "./components/SettingsView";
-import LeaderboardView  from "./components/LeaderboardView";
 
 export default function App() {
   const [view,          setView]          = useState("auth");
@@ -63,8 +60,6 @@ export default function App() {
   const [toast,         setToast]         = useState(null);
   // ★ dynamic quiz questions (null = use static QUIZZES lookup)
   const [pendingQuiz,   setPendingQuiz]   = useState(null);
-  // ★ milestone celebration queue — shown one at a time, full-screen
-  const [celebrationQueue, setCelebrationQueue] = useState([]);
 
   const notify = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),3200); };
 
@@ -88,10 +83,6 @@ export default function App() {
             totalSessions: profile.total_sessions,
             streakShields:  profile.streak_shields  || 0,
             difficultyLock: profile.difficulty_locked || false,
-            leaderboardVisible: profile.leaderboard_visible || false,
-            milestones: profile.milestones
-              ? (typeof profile.milestones === "string" ? JSON.parse(profile.milestones) : profile.milestones)
-              : [],
           });
           const [past, savedUploads, aiP, myAIP] = await Promise.all([
             fetchSessions(session.user.id),
@@ -120,12 +111,6 @@ export default function App() {
       setUser({
         id: data.user.id, name: profile.name, email: data.user.email,
         level: profile.level, streak: profile.streak, totalSessions: profile.total_sessions,
-        streakShields:  profile.streak_shields  || 0,
-        difficultyLock: profile.difficulty_locked || false,
-        leaderboardVisible: profile.leaderboard_visible || false,
-        milestones: profile.milestones
-          ? (typeof profile.milestones === "string" ? JSON.parse(profile.milestones) : profile.milestones)
-          : [],
       });
       const [past, savedUploads, aiP, myAIP] = await Promise.all([
         fetchSessions(data.user.id),
@@ -153,8 +138,7 @@ export default function App() {
 
   const guestLogin = () => {
     setIsGuest(true);
-    setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0,
-      streakShields:0, difficultyLock:false, leaderboardVisible:false, milestones:[] });
+    setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0 });
     setView("dashboard");
   };
 
@@ -208,32 +192,13 @@ export default function App() {
           getProfile(user.id),
         ]);
         setSessions(past);
-        const currentMilestones = profile.milestones
-          ? (typeof profile.milestones === "string" ? JSON.parse(profile.milestones) : profile.milestones)
-          : [];
         setUser(prev => ({
           ...prev,
           totalSessions:  profile.total_sessions,
           streak:         profile.streak,
           streakShields:  profile.streak_shields  || 0,
           difficultyLock: profile.difficulty_locked || false,
-          milestones:     currentMilestones,
         }));
-
-        // ★ Milestone Celebrations — check for newly crossed thresholds
-        const totalWords = past.reduce((a, b) => a + (b.wordsRead || 0), 0);
-        const milestoneStats = {
-          totalWords,
-          hasPerfectQuiz: results.score === 100,
-          streak: profile.streak || 0,
-        };
-        const newMilestones = checkNewMilestones(milestoneStats, currentMilestones);
-        if (newMilestones.length > 0) {
-          setCelebrationQueue(newMilestones);
-          const merged = [...currentMilestones, ...newMilestones.map(m => m.id)];
-          updateMilestones(user.id, merged).catch(e => console.error("Milestone save failed:", e));
-          setUser(prev => ({ ...prev, milestones: merged }));
-        }
       } catch(e) {
         console.error("Failed to save session:", e);
         notify("Session couldn't be saved — check your connection.", "err");
@@ -341,7 +306,6 @@ export default function App() {
     { id:"flashcards",   label:"Flashcards",    icon:"cards",   badge:dueCards },
     { id:"upload",       label:"Upload",        icon:"upload"   },
     { id:"vault",        label:"My Vault",      icon:"vault"    },
-    { id:"leaderboard",  label:"Leaderboard",   icon:"trophy"   },
     { id:"readingtips",  label:"Reading Tips",  icon:"tips"     },
     { id:"settings",     label:"Settings",      icon:"settings" },
   ];
@@ -434,22 +398,13 @@ export default function App() {
         {view==="results"    && lastResults   && <ResultsView  results={lastResults} onDone={()=>setView("dashboard")} onFlashcards={()=>setView("flashcards")}/>}
         {view==="readingtips" && <ReadingTipsView darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="vault"       && <VaultView sessions={sessions} onStart={startReading} darkMode={darkMode} toggleTheme={toggleTheme}/>}
-        {view==="leaderboard" && <LeaderboardView user={user} darkMode={darkMode} toggleTheme={toggleTheme} setView={setView}/>}
-        {view==="settings"    && <SettingsView user={user} setUser={setUser} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme} isGuest={isGuest} sessions={sessions}/>}
+        {view==="settings"    && <SettingsView user={user} setUser={setUser} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme} isGuest={isGuest}/>}
       </main>
 
       {toast && (
         <div style={{position:"fixed",bottom:28,right:28,background:toast.type==="ok"?T.card2:`${T.red}22`,border:`1px solid ${toast.type==="ok"?T.amber+"55":T.red+"55"}`,color:toast.type==="ok"?T.text:T.red,padding:"12px 20px",borderRadius:10,fontSize:14,zIndex:999,animation:"fadeUp 0.3s ease both",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",maxWidth:340}}>
           {toast.msg}
         </div>
-      )}
-
-      {/* ★ Milestone celebration — shows one at a time from the queue */}
-      {celebrationQueue.length > 0 && (
-        <MilestoneCelebration
-          milestone={celebrationQueue[0]}
-          onDismiss={() => setCelebrationQueue(q => q.slice(1))}
-        />
       )}
     </div>
     </ThemeCtx.Provider>
