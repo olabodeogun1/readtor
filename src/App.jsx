@@ -14,7 +14,7 @@ import {
   publishAIPassage, unpublishAIPassage, deleteAIPassage, updateAIPassageQuiz,
   updateMilestones,
 } from "./lib/supabaseHelpers";
-import { generateQuizForPassage } from "./lib/pollinationsApi";
+import { generateQuizForPassage } from "./lib/aiApi";
 import { checkNewMilestones } from "./lib/milestones";
 
 import { SplashScreen, MilestoneCelebration } from "./components/common";

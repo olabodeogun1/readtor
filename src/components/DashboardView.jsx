@@ -4,7 +4,7 @@ import { LEVELS, QUOTES, PASSAGES } from "../constants";
 import { SVG, ICONS } from "../icons";
 import { Btn, Tag, ThemeToggleBtn, TitleBadge } from "./common";
 import { fetchDailyPassage, saveDailyPassage } from "../lib/supabaseHelpers";
-import { generateWithAI, generateQuizForPassage } from "../lib/pollinationsApi";
+import { generateWithAI, generateQuizForPassage } from "../lib/aiApi";
 import { computeReaderStats, computeTitle } from "../lib/titles";
 import {
   currentWeeklyTheme, getWeeklyThemeOptIn, todayKey, todaysTopic, todaysGenre,

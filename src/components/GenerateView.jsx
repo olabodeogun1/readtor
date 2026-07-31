@@ -3,7 +3,7 @@ import { useTheme } from "../theme";
 import { LEVELS } from "../constants";
 import { SVG, ICONS } from "../icons";
 import { Btn, ThemeToggleBtn } from "./common";
-import { generateWithAI, generateQuizForPassage } from "../lib/pollinationsApi";
+import { generateWithAI, generateQuizForPassage } from "../lib/aiApi";
 import { canGenerate, recordGeneration, generationsUsed, nextResetMs, RATE_LIMIT } from "../lib/rateLimit";
 import { getWeeklyThemeOptIn, currentWeeklyTheme } from "../lib/variety";
 
