@@ -3,24 +3,60 @@ import { useTheme } from "../theme";
 import { SVG, ICONS } from "../icons";
 import { Btn } from "./common";
 
+// ── Voice selection — prefer the most natural-sounding available voice ──────
+// Browsers (especially Edge/Chrome) bundle a mix of legacy robotic voices and
+// higher-quality "Online (Natural)"/Neural voices. We score and pick the best.
+function pickBestVoice(voices) {
+  const english = voices.filter(v => v.lang && v.lang.toLowerCase().startsWith("en"));
+  const pool = english.length ? english : voices;
+  if (pool.length === 0) return null;
+
+  const qualityKeywords = ["natural", "neural", "premium", "enhanced", "online"];
+  const scored = pool.map(v => {
+    const name = v.name.toLowerCase();
+    let score = 0;
+    qualityKeywords.forEach(k => { if (name.includes(k)) score += 10; });
+    if (v.localService === false) score += 3; // cloud voices are usually higher quality
+    if (name.includes("google")) score += 2;
+    return { voice: v, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].voice;
+}
+
 export default function ReadingView({ passage, onFinish, onExit }) {
   const T = useTheme();
-    const [mode,      setMode]      = useState("highlight");
-  const [wpm,       setWpm]       = useState(250);
-  const [playing,   setPlaying]   = useState(false);
-  const [wordIdx,   setWordIdx]   = useState(0);
-  const [elapsed,   setElapsed]   = useState(0);
-  const [startTs,   setStartTs]   = useState(null);
-  const [fontSize,  setFontSize]  = useState(18);
-  const [countdown, setCountdown] = useState(null);  // 3,2,1,null = playing
-  const [focusMode, setFocusMode] = useState(false); // RSVP bionic focus
-  const [audioOn,   setAudioOn]   = useState(false); // TTS audio
-  const timerRef    = useRef(null);
-  const clockRef    = useRef(null);
-  const utterRef    = useRef(null);
-  const words       = passage.text.split(/\s+/);
-  const progress    = words.length > 1 ? (wordIdx / (words.length - 1)) * 100 : 0;
-  const liveWpm     = elapsed > 4 ? Math.round((wordIdx / elapsed) * 60) : wpm;
+  const [mode,        setMode]        = useState("highlight");
+  const [wpm,         setWpm]         = useState(250);
+  const [playing,     setPlaying]     = useState(false);
+  const [wordIdx,     setWordIdx]     = useState(0);
+  const [elapsed,     setElapsed]     = useState(0);
+  const [startTs,     setStartTs]     = useState(null);
+  const [fontSize,    setFontSize]    = useState(18);
+  const [countdown,   setCountdown]   = useState(null);  // 3,2,1,null = playing
+  const [focusMode,   setFocusMode]   = useState(false); // RSVP bionic focus
+  const [audioEnabled,setAudioEnabled]= useState(false);  // narration on/off
+  const [hasStarted,  setHasStarted]  = useState(false);  // RSVP: has the countdown ever finished?
+
+  const timerRef  = useRef(null);
+  const clockRef  = useRef(null);
+  const utterRef  = useRef(null);
+  const voiceRef  = useRef(null);
+
+  const words     = passage.text.split(/\s+/);
+  const progress  = words.length > 1 ? (wordIdx / (words.length - 1)) * 100 : 0;
+  const liveWpm   = elapsed > 4 ? Math.round((wordIdx / elapsed) * 60) : wpm;
+
+  // ── Load the best available voice once voices are ready ──────────────────
+  useEffect(() => {
+    const loadVoice = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) voiceRef.current = pickBestVoice(voices);
+    };
+    loadVoice();
+    window.speechSynthesis.onvoiceschanged = loadVoice;
+    return () => { window.speechSynthesis.onvoiceschanged = null; };
+  }, []);
 
   // ── Focus mode: highlight middle character of each word in amber ──────────
   function renderFocusWord(word) {
@@ -38,24 +74,55 @@ export default function ReadingView({ passage, onFinish, onExit }) {
     );
   }
 
-  // ── Audio (TTS) ───────────────────────────────────────────────────────────
-  const toggleAudio = () => {
-    if (audioOn) {
-      window.speechSynthesis.cancel();
-      setAudioOn(false);
-    } else {
-      window.speechSynthesis.cancel();
-      const utt = new SpeechSynthesisUtterance(passage.text);
-      utt.rate  = Math.min(2, Math.max(0.5, wpm / 180));
-      utt.onend = () => setAudioOn(false);
-      utterRef.current = utt;
-      window.speechSynthesis.speak(utt);
-      setAudioOn(true);
-    }
-  };
+  // ── Audio (TTS) — single utterance, properly paused/resumed, never drifts ─
+  // Speech follows the SAME playing state as the visual reading (for
+  // highlight/RSVP). For scroll mode, there is no separate "playing" concept,
+  // so the audio toggle itself starts/stops it directly.
+  const startSpeaking = useCallback(() => {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(passage.text);
+    utt.rate  = Math.min(2, Math.max(0.5, wpm / 150));
+    utt.pitch = 1;
+    if (voiceRef.current) utt.voice = voiceRef.current;
+    utt.onend = () => setAudioEnabled(false);
+    utterRef.current = utt;
+    window.speechSynthesis.speak(utt);
+  }, [passage.text, wpm]);
 
-  // Stop audio when leaving
-  useEffect(() => () => window.speechSynthesis.cancel(), []);
+  // React to audioEnabled + playing changes — this is what fixes the
+  // "voice keeps reading while paused" bug: pause/resume the SAME utterance
+  // instead of letting it run independently of the reading state.
+  useEffect(() => {
+    if (!audioEnabled) {
+      window.speechSynthesis.cancel();
+      utterRef.current = null;
+      return;
+    }
+    // Scroll mode has no "playing" concept — audio just runs continuously
+    // while enabled, and can be paused/resumed via the same toggle logic below.
+    const shouldSpeak = mode === "scroll" ? true : playing;
+
+    if (shouldSpeak) {
+      if (utterRef.current && window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      } else if (!utterRef.current) {
+        startSpeaking();
+      }
+    } else {
+      if (utterRef.current && window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+        window.speechSynthesis.pause();
+      }
+    }
+  }, [audioEnabled, playing, mode, startSpeaking]);
+
+  // Stop audio on unmount
+  useEffect(() => {
+    return () => window.speechSynthesis.cancel();
+  }, []);
+
+  const toggleAudio = () => {
+    setAudioEnabled(a => !a);
+  };
 
   // ── RSVP tick ─────────────────────────────────────────────────────────────
   const tick = useCallback(() => {
@@ -80,6 +147,9 @@ export default function ReadingView({ passage, onFinish, onExit }) {
   }, [playing]);
 
   // ── 3-second RSVP countdown ───────────────────────────────────────────────
+  // hasStarted gates word display so the FIRST word never appears before the
+  // countdown — previously words[0] rendered immediately on mount, making
+  // the real RSVP flow feel like it "skipped" straight to word 2.
   const startRSVP = () => {
     if (mode !== "rsvp") { setPlaying(p => !p); return; }
     if (playing) { setPlaying(false); return; }
@@ -90,6 +160,7 @@ export default function ReadingView({ passage, onFinish, onExit }) {
       if (count <= 0) {
         clearInterval(id);
         setCountdown(null);
+        setHasStarted(true);
         setPlaying(true);
       } else {
         setCountdown(count);
@@ -118,10 +189,10 @@ export default function ReadingView({ passage, onFinish, onExit }) {
         <div style={{fontFamily:T.serif,fontSize:17,fontWeight:700,color:T.text,flex:1,textAlign:"center"}}>{passage.title}</div>
         <div style={{display:"flex",gap:16,alignItems:"center"}}>
           {/* Audio button */}
-          <button onClick={toggleAudio} title={audioOn?"Stop audio":"Read aloud"}
-            style={{background:audioOn?`${T.teal}22`:"none",border:`1px solid ${audioOn?T.teal:T.border}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,color:audioOn?T.teal:T.text3,transition:"all 0.15s"}}>
-            <SVG d={audioOn?ICONS.volumeOff:ICONS.volume} size={15} stroke="currentColor"/>
-            <span style={{fontSize:11}}>{audioOn?"Stop":"Audio"}</span>
+          <button onClick={toggleAudio} title={audioEnabled?"Turn off narration":"Read aloud"}
+            style={{background:audioEnabled?`${T.teal}22`:"none",border:`1px solid ${audioEnabled?T.teal:T.border}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,color:audioEnabled?T.teal:T.text3,transition:"all 0.15s"}}>
+            <SVG d={audioEnabled?ICONS.volumeOff:ICONS.volume} size={15} stroke="currentColor"/>
+            <span style={{fontSize:11}}>{audioEnabled?"Narrating":"Audio"}</span>
           </button>
           <div style={{textAlign:"right"}}><div style={{fontFamily:T.mono,fontSize:22,fontWeight:700,color:T.amber}}>{liveWpm}</div><div style={{fontSize:10,color:T.text3,letterSpacing:.5}}>WPM</div></div>
           <div style={{textAlign:"right"}}><div style={{fontFamily:T.mono,fontSize:18,color:T.teal}}>{Math.round(progress)}%</div><div style={{fontSize:10,color:T.text3,letterSpacing:.5}}>done</div></div>
@@ -137,7 +208,7 @@ export default function ReadingView({ passage, onFinish, onExit }) {
       <div style={{padding:"12px 32px",borderBottom:`1px solid ${T.border}`,background:T.surface,display:"flex",alignItems:"center",gap:16,flexShrink:0,flexWrap:"wrap"}}>
         <div style={{display:"flex",gap:4}}>
           {[["highlight","Highlight"],["rsvp","RSVP"],["scroll","Scroll"]].map(([m,l])=>(
-            <button key={m} onClick={()=>{setMode(m);setPlaying(false);setWordIdx(0);setCountdown(null);}}
+            <button key={m} onClick={()=>{setMode(m);setPlaying(false);setWordIdx(0);setCountdown(null);setHasStarted(false);}}
               style={{padding:"6px 14px",borderRadius:6,border:`1px solid ${mode===m?T.amber:T.border}`,background:mode===m?T.amberGlow:"transparent",color:mode===m?T.amber:T.text3,cursor:"pointer",fontSize:13,fontWeight:mode===m?600:400,transition:"all 0.15s"}}>{l}</button>
           ))}
         </div>
@@ -187,10 +258,15 @@ export default function ReadingView({ passage, onFinish, onExit }) {
               </div>
             )}
             <div style={{fontFamily:T.serif,fontSize:Math.max(48,fontSize*2.5),color:T.text,minHeight:100,display:"flex",alignItems:"center",justifyContent:"center",animation:"rsvpIn 0.25s ease both",letterSpacing:-0.5}} key={wordIdx}>
-              {focusMode ? renderFocusWord(words[wordIdx]) : <span style={{color:T.amber}}>{words[wordIdx]}</span>}
+              {!hasStarted
+                ? <span style={{color:T.text3,fontSize:"0.4em"}}>Press Play to begin</span>
+                : focusMode ? renderFocusWord(words[wordIdx]) : <span style={{color:T.amber}}>{words[wordIdx]}</span>
+              }
             </div>
-            <div style={{fontSize:13,color:T.text3,marginTop:24,fontFamily:T.mono}}>{wordIdx+1} / {words.length} words</div>
-            {focusMode && (
+            <div style={{fontSize:13,color:T.text3,marginTop:24,fontFamily:T.mono}}>
+              {hasStarted ? `${wordIdx+1} / ${words.length} words` : `${words.length} words total`}
+            </div>
+            {focusMode && hasStarted && (
               <div style={{marginTop:12,fontSize:11,color:T.text3}}>
                 <span style={{color:T.amber,fontWeight:700}}>Bold</span> = focus anchor · white = rest of word
               </div>
