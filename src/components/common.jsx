@@ -51,8 +51,8 @@ export function SplashScreen() {
   const T = useTheme();
   return (
     <div style={{minHeight:"100vh",background:T.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20}}>
-      <div style={{fontFamily:T.serif,fontSize:12,color:T.text2,textAlign:"center",padding:"0 20px",lineHeight:1.4,animation:"fadeUp 0.5s ease both"}}>
-        Welcome to <span style={{fontSize:13,fontWeight:900,color:T.amber}}>Readtor</span>, your reading tutor.
+      <div style={{fontFamily:T.serif,fontSize:22,color:T.text2,textAlign:"center",padding:"0 20px",lineHeight:1.4,animation:"fadeUp 0.5s ease both"}}>
+        Welcome to <span style={{fontSize:24,fontWeight:900,color:T.amber}}>Readtor</span>, your reading tutor.
       </div>
       <div style={{display:"flex",gap:6,marginTop:8,animation:"fadeUp 0.5s 0.2s ease both"}}>
         {[0,1,2].map(i=>(
