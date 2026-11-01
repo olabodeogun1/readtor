@@ -1,32 +1,9 @@
-import { useId } from "react";
 import { useTheme, T } from "../theme";
 import { SVG, ICONS } from "../icons";
 
-// ── Readtor logo mark — open book + spark on an amber tile (mirrors public/logo.svg) ──
+// ── Readtor logo — book cover with an "R" and a bookmark; the artwork lives in public/logo.svg ──
 export function Logo({ size = 40, style = {} }) {
-  const id = useId();
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" fill="none" style={{flexShrink:0,...style}} aria-label="Readtor">
-      <defs>
-        <linearGradient id={id} x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#f5c76a"/>
-          <stop offset="1" stopColor="#e8a838"/>
-        </linearGradient>
-      </defs>
-      <rect width="64" height="64" rx="16" fill={`url(#${id})`}/>
-      <g transform="translate(0 4)">
-        <path d="M32 7 33.8 10.2 37 12 33.8 13.8 32 17 30.2 13.8 27 12 30.2 10.2Z" fill="#07080f"/>
-        <path d="M30.5 24C25 20.5 18 20 13 22.5V45C18 43 25 43.5 30.5 47Z" fill="#07080f"/>
-        <path d="M33.5 24C39 20.5 46 20 51 22.5V45C46 43 39 43.5 33.5 47Z" fill="#07080f"/>
-        <g stroke="#e8a838" strokeWidth="1.6" strokeLinecap="round">
-          <path d="M17.5 29.5Q23.5 27.5 28 29.5"/>
-          <path d="M17.5 34.5Q23.5 32.5 28 34.5"/>
-          <path d="M36 29.5Q40.5 27.5 46.5 29.5"/>
-          <path d="M36 34.5Q40.5 32.5 46.5 34.5"/>
-        </g>
-      </g>
-    </svg>
-  );
+  return <img src={`${import.meta.env.BASE_URL}logo.svg`} width={size} height={size} alt="Readtor" draggable={false} style={{flexShrink:0,...style}}/>;
 }
 
 // ── Button — uses module-level T directly (kept in sync by App) ──────────
