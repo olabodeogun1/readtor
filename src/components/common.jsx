@@ -54,7 +54,7 @@ export function SplashScreen() {
       <div style={{fontFamily:T.serif,fontSize:48,fontWeight:900,color:T.amber,letterSpacing:-2,animation:"fadeUp 0.5s ease both"}}>
         Read<span style={{color:T.text}}>tor</span>
       </div>
-      <div style={{fontSize:14,color:T.text3,animation:"fadeUp 0.5s 0.1s ease both"}}>Welcome to Readtor</div>
+      <div style={{fontSize:14,color:T.text3,animation:"fadeUp 0.5s 0.1s ease both"}}>Welcome to Readtor, your reading tutor.</div>
       <div style={{display:"flex",gap:6,marginTop:8,animation:"fadeUp 0.5s 0.2s ease both"}}>
         {[0,1,2].map(i=>(
           <div key={i} style={{width:8,height:8,borderRadius:"50%",background:T.amber,animation:`pulse 1.2s ${i*0.2}s ease-in-out infinite`}}/>

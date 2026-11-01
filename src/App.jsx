@@ -31,6 +31,10 @@ import ReadingTipsView  from "./components/ReadingTipsView";
 import VaultView        from "./components/VaultView";
 import SettingsView     from "./components/SettingsView";
 import LeaderboardView  from "./components/LeaderboardView";
+import WelcomeView      from "./components/WelcomeView";
+
+// The welcome page shows once per browser tab session (covers login, guest, and Google redirect)
+const WELCOMED_KEY = "readtor_welcomed";
 
 export default function App() {
   const [view,          setView]          = useState("auth");
@@ -103,7 +107,9 @@ export default function App() {
           setUploads(savedUploads);
           setAIPassages(aiP);
           setMyAIPassages(myAIP);
-          setView("dashboard");
+          // Restored session: only greet if this tab hasn't been welcomed yet (e.g. Google redirect)
+          if (sessionStorage.getItem(WELCOMED_KEY)) setView("dashboard");
+          else { sessionStorage.setItem(WELCOMED_KEY, "1"); setView("welcome"); }
         } catch(e) { setView("auth"); }
         finally { setLoading(false); }
       } else {
@@ -137,8 +143,8 @@ export default function App() {
       setUploads(savedUploads);
       setAIPassages(aiP);
       setMyAIPassages(myAIP);
-      setView("dashboard");
-      notify("Welcome back! Ready to read faster?");
+      sessionStorage.setItem(WELCOMED_KEY, "1");
+      setView("welcome");
     } catch(e) { notify(e.message || "Login failed — check your email and password", "err"); }
   };
 
@@ -155,11 +161,13 @@ export default function App() {
     setIsGuest(true);
     setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0,
       streakShields:0, difficultyLock:false, leaderboardVisible:false, milestones:[] });
-    setView("dashboard");
+    sessionStorage.setItem(WELCOMED_KEY, "1");
+    setView("welcome");
   };
 
   const logout = async () => {
     await signOut();
+    sessionStorage.removeItem(WELCOMED_KEY);
     setUser(null); setIsGuest(false); setSessions([]); setUploads([]); setAIPassages([]); setMyAIPassages([]); setView("auth");
   };
 
@@ -334,6 +342,9 @@ export default function App() {
     </ThemeCtx.Provider>
   );
 
+  // Views that render full-screen without the sidebar / mobile nav
+  const bare = ["welcome","reading","quiz","results"].includes(view);
+
   const NAV = [
     { id:"dashboard",    label:"Dashboard",     icon:"home"     },
     { id:"library",      label:"Library",       icon:"library"  },
@@ -349,7 +360,7 @@ export default function App() {
   return (
     <ThemeCtx.Provider value={theme}>
     <div style={{display:"flex",minHeight:"100vh",background:T.bg}}>
-      {!["reading","quiz","results"].includes(view) && (<>
+      {!bare && (<>
         {/* ── Desktop sidebar ── */}
         <aside style={{width:220,flexShrink:0,background:T.surface,borderRight:`1px solid ${T.border}`,
           display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:50,
@@ -423,8 +434,9 @@ export default function App() {
         )}
       </>)}
 
-      <main style={{flex:1,marginLeft:(!mobile && !["reading","quiz","results"].includes(view))?220:0,minHeight:"100vh",overflow:"auto",paddingTop:mobile&&!["reading","quiz","results"].includes(view)?52:0,paddingBottom:mobile&&!["reading","quiz","results"].includes(view)?60:0}}>
-        {view==="dashboard"  && <DashboardView  user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+      <main style={{flex:1,marginLeft:(!mobile && !bare)?220:0,minHeight:"100vh",overflow:"auto",paddingTop:mobile&&!bare?52:0,paddingBottom:mobile&&!bare?60:0}}>
+        {view==="welcome"    && <WelcomeView    user={user} isGuest={isGuest} onContinue={()=>setView("dashboard")} onNavigate={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
+        {view==="dashboard"  && <DashboardView user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz} darkMode={darkMode} toggleTheme={toggleTheme} difficultyLock={user?.difficultyLock}/>}
         {view==="flashcards" && <FlashcardsView flashcards={flashcards} setFlashcards={setFlashcards} darkMode={darkMode} toggleTheme={toggleTheme}/>}
