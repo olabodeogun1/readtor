@@ -17,7 +17,7 @@ import {
 import { generateQuizForPassage } from "./lib/aiApi";
 import { checkNewMilestones } from "./lib/milestones";
 
-import { SplashScreen, MilestoneCelebration } from "./components/common";
+import { SplashScreen, MilestoneCelebration, Logo } from "./components/common";
 import AuthPage         from "./components/AuthPage";
 import DashboardView    from "./components/DashboardView";
 import LibraryView      from "./components/LibraryView";
@@ -372,7 +372,10 @@ export default function App() {
           display:"flex",flexDirection:"column",position:"fixed",left:0,top:0,bottom:0,zIndex:50,
           ...(mobile && {display:"none"})}}>
           <div style={{padding:"28px 20px 24px",borderBottom:`1px solid ${T.border}`}}>
-            <div style={{fontFamily:T.serif,fontSize:26,fontWeight:900,color:T.amber,letterSpacing:-0.5}}>Readtor</div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <Logo size={34}/>
+              <div style={{fontFamily:T.serif,fontSize:26,fontWeight:900,color:T.amber,letterSpacing:-0.5}}>Readtor</div>
+            </div>
             <div style={{fontSize:11,color:T.text3,marginTop:2,letterSpacing:.5}}>Read · Absorb · Remember</div>
           </div>
           <nav style={{flex:1,padding:"16px 10px",display:"flex",flexDirection:"column",gap:2,overflowY:"auto"}}>
@@ -410,7 +413,10 @@ export default function App() {
         {/* ── Mobile top header ── */}
         {mobile && (
           <div style={{position:"fixed",top:0,left:0,right:0,zIndex:50,background:T.surface,borderBottom:`1px solid ${T.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px",height:52}}>
-            <div style={{fontFamily:T.serif,fontSize:22,fontWeight:900,color:T.amber}}>Readtor</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <Logo size={28}/>
+              <div style={{fontFamily:T.serif,fontSize:22,fontWeight:900,color:T.amber}}>Readtor</div>
+            </div>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${T.amber},${T.amber2})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,color:T.bg}}>
                 {user?.name?.[0]?.toUpperCase()}

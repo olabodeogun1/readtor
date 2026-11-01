@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTheme } from "../theme";
-import { Btn } from "./common";
+import { Btn, Logo } from "./common";
 import { GoogleIcon } from "../icons";
 
 export default function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
@@ -36,6 +36,7 @@ export default function AuthPage({ onLogin, onSignup, onGuest, onGoogle }) {
       {/* Left hero */}
       <div style={{flex:1,background:`linear-gradient(160deg,#0d0f1c 0%,#07080f 60%)`,display:"flex",flexDirection:"column",justifyContent:"center",padding:"60px 64px",borderRight:`1px solid ${T.border}`,position:"relative",overflow:"hidden"}}>
         <div style={{position:"absolute",top:"-10%",right:"-5%",width:500,height:500,borderRadius:"50%",background:`radial-gradient(circle,${T.amber}08 0%,transparent 70%)`,pointerEvents:"none"}}/>
+        <Logo size={72} style={{marginBottom:20,animation:"fadeUp 0.6s ease both"}}/>
         <div style={{fontFamily:T.serif,fontSize:64,fontWeight:900,color:T.amber,letterSpacing:-2,lineHeight:1,marginBottom:16,animation:"fadeUp 0.6s ease both"}}>Read<span style={{color:T.text}}>tor</span></div>
         <div style={{fontSize:20,color:T.text2,fontStyle:"italic",fontFamily:T.serif,marginBottom:48,animation:"fadeUp 0.6s 0.1s ease both",lineHeight:1.5}}>Read faster.<br/>Think deeper.<br/>Remember more.</div>
         <div style={{display:"flex",gap:32,animation:"fadeUp 0.6s 0.2s ease both"}}>
