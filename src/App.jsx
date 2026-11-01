@@ -31,9 +31,8 @@ import ReadingTipsView  from "./components/ReadingTipsView";
 import VaultView        from "./components/VaultView";
 import SettingsView     from "./components/SettingsView";
 import LeaderboardView  from "./components/LeaderboardView";
-import WelcomeView      from "./components/WelcomeView";
 
-// The welcome page shows once per browser tab session (covers login, guest, and Google redirect)
+// The welcome splash shows once per browser tab session (covers login, guest, and Google redirect)
 const WELCOMED_KEY = "readtor_welcomed";
 
 export default function App() {
@@ -107,9 +106,9 @@ export default function App() {
           setUploads(savedUploads);
           setAIPassages(aiP);
           setMyAIPassages(myAIP);
-          // Restored session: only greet if this tab hasn't been welcomed yet (e.g. Google redirect)
+          // Restored session: only show the splash if this tab hasn't been welcomed yet (e.g. Google redirect)
           if (sessionStorage.getItem(WELCOMED_KEY)) setView("dashboard");
-          else { sessionStorage.setItem(WELCOMED_KEY, "1"); setView("welcome"); }
+          else { sessionStorage.setItem(WELCOMED_KEY, "1"); setView("splash"); }
         } catch(e) { setView("auth"); }
         finally { setLoading(false); }
       } else {
@@ -117,6 +116,13 @@ export default function App() {
       }
     });
   }, []);
+
+  // After login, show the welcome splash briefly, then go to the dashboard
+  useEffect(() => {
+    if (view !== "splash") return;
+    const t = setTimeout(() => setView("dashboard"), 2200);
+    return () => clearTimeout(t);
+  }, [view]);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const login = async (email, password) => {
@@ -144,7 +150,7 @@ export default function App() {
       setAIPassages(aiP);
       setMyAIPassages(myAIP);
       sessionStorage.setItem(WELCOMED_KEY, "1");
-      setView("welcome");
+      setView("splash");
     } catch(e) { notify(e.message || "Login failed — check your email and password", "err"); }
   };
 
@@ -162,7 +168,7 @@ export default function App() {
     setUser({ id:"guest", name:"Guest Reader", level:1, streak:0, totalSessions:0,
       streakShields:0, difficultyLock:false, leaderboardVisible:false, milestones:[] });
     sessionStorage.setItem(WELCOMED_KEY, "1");
-    setView("welcome");
+    setView("splash");
   };
 
   const logout = async () => {
@@ -330,7 +336,7 @@ export default function App() {
   const dueCards = flashcards.filter(f=>f.due<=Date.now()).length;
 
   // Show splash while checking existing session
-  if (loading) return (
+  if (loading || view==="splash") return (
     <ThemeCtx.Provider value={theme}>
       <SplashScreen/>
     </ThemeCtx.Provider>
@@ -343,7 +349,7 @@ export default function App() {
   );
 
   // Views that render full-screen without the sidebar / mobile nav
-  const bare = ["welcome","reading","quiz","results"].includes(view);
+  const bare = ["reading","quiz","results"].includes(view);
 
   const NAV = [
     { id:"dashboard",    label:"Dashboard",     icon:"home"     },
@@ -435,7 +441,6 @@ export default function App() {
       </>)}
 
       <main style={{flex:1,marginLeft:(!mobile && !bare)?220:0,minHeight:"100vh",overflow:"auto",paddingTop:mobile&&!bare?52:0,paddingBottom:mobile&&!bare?60:0}}>
-        {view==="welcome"    && <WelcomeView    user={user} isGuest={isGuest} onContinue={()=>setView("dashboard")} onNavigate={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="dashboard"  && <DashboardView user={user} isGuest={isGuest} sessions={sessions} onStart={startReading} flashcards={flashcards} setView={setView} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="library"    && <LibraryView    onStart={startReading} aiPassages={aiPassages} myAIPassages={myAIPassages} userId={user?.id} onPublish={handlePublishAIPassage} onDeleteAI={handleDeleteAIPassage} onRegenerateQuiz={handleRegenerateQuiz} notify={notify} darkMode={darkMode} toggleTheme={toggleTheme}/>}
         {view==="generate"   && <GenerateView   user={user} isGuest={isGuest} onStart={startReading} notify={notify} onSaveAIPassage={handleSaveAIPassage} onRegenerateQuiz={handleRegenerateQuiz} darkMode={darkMode} toggleTheme={toggleTheme} difficultyLock={user?.difficultyLock}/>}
